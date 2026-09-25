@@ -2,3 +2,4 @@ flask
 feedparser
 trafilatura
 gunicorn
+requests
