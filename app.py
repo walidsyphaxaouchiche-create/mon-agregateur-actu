@@ -5,7 +5,6 @@ from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
 
-# Liste de vos flux RSS
 FEEDS = {
     "Clubic (Tech)": "https://www.clubic.com/feed/news.rss",
     "Le Monde (Actu)": "https://www.lemonde.fr/rss/une.xml",
@@ -13,31 +12,38 @@ FEEDS = {
 }
 
 def get_clean_article(url):
-    downloaded = trafilatura.fetch_url(url)
-    if downloaded:
-        text = trafilatura.extract(
-            downloaded, 
-            include_images=True, 
-            include_links=False, 
-            output_format="txt"
-        )
-        return text or "Impossible d'extraire le contenu texte de cet article."
-    return "Erreur lors de la récupération de la page source."
+    try:
+        # Téléchargement de la page d'origine
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded:
+            # Extraction du texte sans options conflictuelles
+            text = trafilatura.extract(
+                downloaded, 
+                include_links=False,
+                output_format="txt"
+            )
+            return text or "Impossible d'extraire le texte brut de cet article."
+        return "Impossible d'accéder à la page source."
+    except Exception as e:
+        return f"Erreur lors de l'extraction : {str(e)}"
 
 @app.route("/")
 def index():
     all_articles = []
     
     for source_label, feed_url in FEEDS.items():
-        feed = feedparser.parse(feed_url)
-        for entry in feed.entries[:3]: # 3 derniers articles par source
-            published_date = entry.get("published", entry.get("updated", "Date inconnue"))
-            all_articles.append({
-                "title": entry.title,
-                "source": source_label,
-                "date": published_date,
-                "link": entry.link
-            })
+        try:
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:3]:
+                published_date = entry.get("published", entry.get("updated", "Date inconnue"))
+                all_articles.append({
+                    "title": entry.title,
+                    "source": source_label,
+                    "date": published_date,
+                    "link": entry.link
+                })
+        except Exception:
+            continue
 
     html_template = """
     <!DOCTYPE html>
