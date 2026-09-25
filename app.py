@@ -1,4 +1,6 @@
 import os
+import base64
+import requests
 import feedparser
 import trafilatura
 from flask import Flask, render_template_string, request
@@ -11,21 +13,25 @@ FEEDS = {
     "Frandroid (Tech)": "https://www.frandroid.com/feed"
 }
 
+def encode_url(url):
+    return base64.urlsafe_b64encode(url.encode()).decode()
+
+def decode_url(encoded_url):
+    return base64.urlsafe_b64decode(encoded_url.encode()).decode()
+
 def get_clean_article(url):
     try:
-        # Téléchargement de la page d'origine
-        downloaded = trafilatura.fetch_url(url)
-        if downloaded:
-            # Extraction du texte sans options conflictuelles
-            text = trafilatura.extract(
-                downloaded, 
-                include_links=False,
-                output_format="txt"
-            )
+        # Simulation d'un navigateur classique pour ne pas être bloqué
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            text = trafilatura.extract(res.text, include_links=False, output_format="txt")
             return text or "Impossible d'extraire le texte brut de cet article."
-        return "Impossible d'accéder à la page source."
+        return f"Erreur de chargement de la source (Code HTTP : {res.status_code})."
     except Exception as e:
-        return f"Erreur lors de l'extraction : {str(e)}"
+        return f"Erreur lors de la récupération : {str(e)}"
 
 @app.route("/")
 def index():
@@ -40,7 +46,7 @@ def index():
                     "title": entry.title,
                     "source": source_label,
                     "date": published_date,
-                    "link": entry.link
+                    "encoded_link": encode_url(entry.link)
                 })
         except Exception:
             continue
@@ -70,7 +76,7 @@ def index():
                 <span class="tag">{{ a.source }}</span>
                 <div class="title">{{ a.title }}</div>
                 <div class="date">Publié le : {{ a.date }}</div>
-                <a class="btn" href="/article?url={{ a.link }}&title={{ a.title }}&date={{ a.date }}&source={{ a.source }}">Lire l'article nettoyé</a>
+                <a class="btn" href="/article?id={{ a.encoded_link }}&title={{ a.title|e }}&date={{ a.date|e }}&source={{ a.source|e }}">Lire l'article nettoyé</a>
             </div>
         {% endfor %}
     </body>
@@ -80,12 +86,22 @@ def index():
 
 @app.route("/article")
 def article():
-    url = request.args.get("url")
-    title = request.args.get("title", "Article")
-    date = request.args.get("date", "")
-    source = request.args.get("source", "")
-    
-    content = get_clean_article(url)
+    try:
+        encoded_id = request.args.get("id")
+        title = request.args.get("title", "Article")
+        date = request.args.get("date", "")
+        source = request.args.get("source", "")
+        
+        if not encoded_id:
+            content = "L'URL de cet article est invalide."
+        else:
+            url = decode_url(encoded_id)
+            content = get_clean_article(url)
+    except Exception as err:
+        content = f"Une erreur d'affichage est survenue : {str(err)}"
+        title = "Erreur"
+        source = ""
+        date = ""
     
     html_template = """
     <!DOCTYPE html>
