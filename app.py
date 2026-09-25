@@ -1,19 +1,18 @@
 import os
+import time
 import requests
 import feedparser
 import trafilatura
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from urllib.parse import quote, unquote
 from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
 
-# Structure des Domaines et des Sources d'actualités
 CATEGORIES = {
     "politique": {
         "name": "Politique & Géopolitique",
         "icon": "🌐",
-        "color": "#3b82f6",
         "feeds": {
             "Le Monde (Politique)": "https://www.lemonde.fr/politique/rss_full.xml",
             "BBC News (World)": "http://feeds.bbci.co.uk/news/world/rss.xml",
@@ -24,7 +23,6 @@ CATEGORIES = {
     "economie": {
         "name": "Économie & Finance",
         "icon": "📈",
-        "color": "#10b981",
         "feeds": {
             "Les Échos": "https://www.lesechos.fr/rss/rss_une.xml",
             "La Tribune": "https://www.latribune.fr/feed/full.xml",
@@ -34,7 +32,6 @@ CATEGORIES = {
     "tech": {
         "name": "Technologies & IA",
         "icon": "💻",
-        "color": "#8b5cf6",
         "feeds": {
             "The Verge": "https://www.theverge.com/rss/index.xml",
             "Ars Technica": "https://feeds.arstechnica.com/arstechnica/index",
@@ -47,7 +44,6 @@ CATEGORIES = {
     "sciences": {
         "name": "Sciences & Environnement",
         "icon": "🔬",
-        "color": "#06b6d4",
         "feeds": {
             "Futura Sciences": "https://www.futura-sciences.com/rss/actualites.xml",
             "Reporterre": "https://reporterre.net/spip.php?page=backend",
@@ -57,7 +53,6 @@ CATEGORIES = {
     "sante": {
         "name": "Santé & Médecine",
         "icon": "🩺",
-        "color": "#ec4899",
         "feeds": {
             "Inserm": "https://www.inserm.fr/feed/",
             "Futura Santé": "https://www.futura-sciences.com/rss/sante/actualites.xml"
@@ -66,7 +61,6 @@ CATEGORIES = {
     "sport": {
         "name": "Sport",
         "icon": "⚽",
-        "color": "#f59e0b",
         "feeds": {
             "L'Équipe": "https://www.lequipe.fr/rss/actu_rss.xml",
             "RMC Sport": "https://rmcsport.bfmtv.com/rss/fil-info/",
@@ -76,7 +70,6 @@ CATEGORIES = {
     "culture": {
         "name": "Culture, Société & Médias",
         "icon": "🎭",
-        "color": "#6366f1",
         "feeds": {
             "France Culture": "https://www.radiofrance.fr/franceculture/rss",
             "Télérama": "https://www.telerama.fr/rss/actu.xml",
@@ -85,7 +78,6 @@ CATEGORIES = {
     }
 }
 
-# Style CSS Global (Design Premium + Mode Sombre automatique)
 COMMON_CSS = """
     :root {
         --bg-color: #f8fafc;
@@ -107,7 +99,7 @@ COMMON_CSS = """
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { 
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
         background: var(--bg-color); 
         color: var(--text-primary); 
         max-width: 680px; 
@@ -116,7 +108,7 @@ COMMON_CSS = """
         line-height: 1.5;
     }
     header { text-align: center; margin-bottom: 24px; padding-top: 10px; }
-    header h1 { font-size: 2rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text-primary); }
+    header h1 { font-size: 2rem; font-weight: 800; letter-spacing: -0.5px; }
     header p { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; text-transform: capitalize; }
     
     .category-grid {
@@ -136,7 +128,7 @@ COMMON_CSS = """
         flex-direction: column;
         align-items: center;
         text-align: center;
-        transition: transform 0.15s ease, box-shadow 0.15s ease;
+        transition: transform 0.15s ease;
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
     .cat-card:active { transform: scale(0.97); }
@@ -154,7 +146,7 @@ COMMON_CSS = """
     .card-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
     .tag { font-size: 0.75rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; background: rgba(37,99,235,0.1); color: var(--accent-color); }
     .date { font-size: 0.75rem; color: var(--text-secondary); }
-    .card-title { font-size: 1.1rem; font-weight: 700; line-height: 1.4; margin-bottom: 14px; color: var(--text-primary); }
+    .card-title { font-size: 1.1rem; font-weight: 700; line-height: 1.4; margin-bottom: 14px; }
     .btn { 
         display: block; 
         text-align: center; 
@@ -165,24 +157,60 @@ COMMON_CSS = """
         border-radius: 10px; 
         font-weight: 600; 
         font-size: 0.88rem; 
-        transition: opacity 0.2s;
     }
-    .btn:active { opacity: 0.85; }
+    .btn-outline {
+        display: inline-block;
+        padding: 8px 14px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        color: var(--text-primary);
+        text-decoration: none;
+        font-size: 0.85rem;
+        font-weight: 600;
+        background: var(--card-bg);
+    }
     .back { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 20px; color: var(--accent-color); text-decoration: none; font-weight: 600; font-size: 0.95rem; }
 """
 
-def fetch_clean_text(url):
+def parse_and_filter_date(entry):
+    """ Parse la date de publication et vérifie si elle date de moins de 48h """
+    parsed_time = entry.get("published_parsed") or entry.get("updated_parsed")
+    if parsed_time:
+        dt = datetime(*parsed_time[:6], tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        # Filtre les articles de plus de 48 heures
+        if (now - dt) > timedelta(hours=48):
+            return None, None
+        formatted_date = dt.strftime("%d/%m/%Y à %H:%M")
+        return dt, formatted_date
+    return None, "Aujourd'hui"
+
+def fetch_clean_article(url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        text = trafilatura.extract(response.text, include_links=False)
-        return text or "Impossible d'extraire le texte brut de cet article."
+        # Activer l'extraction d'images et le rendu HTML
+        html_content = trafilatura.extract(
+            response.text,
+            include_images=True,
+            include_links=False,
+            output_format="html"
+        )
+        if html_content:
+            return html_content
+        
+        # Secours en mode texte brut
+        text = trafilatura.extract(response.text, include_links=False, output_format="txt")
+        if text:
+            paragraphs = text.split("\n\n")
+            return "".join([f"<p>{p.strip()}</p>" for p in paragraphs if p.strip()])
+            
+        return "<p>Impossible d'extraire le texte brut de cet article.</p>"
     except Exception as e:
-        return f"Impossible de charger la page source : {str(e)}"
+        return f"<p>Erreur lors du chargement : {str(e)}</p>"
 
-# Page d'accueil : Sélection du Domaine
 @app.route("/")
 def index():
     today = datetime.now().strftime("%A %d %B %Y")
@@ -216,7 +244,6 @@ def index():
     """
     return render_template_string(html)
 
-# Page d'un Domaine spécifique
 @app.route("/category")
 def category():
     cat_key = request.args.get("cat")
@@ -229,17 +256,26 @@ def category():
     for source_name, feed_url in cat_info["feeds"].items():
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:3]: # 3 articles par source
-                published_date = entry.get("published", entry.get("updated", "Aujourd'hui"))
+            for entry in feed.entries[:8]: # Recherche sur les 8 derniers articles
+                dt, formatted_date = parse_and_filter_date(entry)
+                
+                # Ignorer si l'article a plus de 48h
+                if formatted_date is None:
+                    continue
+                    
                 articles.append({
+                    "dt": dt or datetime.now(timezone.utc),
                     "title": entry.title,
                     "source": source_name,
-                    "date": published_date,
+                    "date": formatted_date,
                     "safe_url": quote(entry.link, safe=""),
                     "safe_title": quote(entry.title, safe="")
                 })
         except Exception:
             continue
+
+    # Trier du plus récent au plus ancien
+    articles.sort(key=lambda x: x["dt"], reverse=True)
 
     html = f"""
     <!DOCTYPE html>
@@ -255,6 +291,7 @@ def category():
         <header style="text-align: left; margin-bottom: 20px;">
             <div style="font-size: 2.5rem; margin-bottom: 4px;">{cat_info['icon']}</div>
             <h1>{cat_info['name']}</h1>
+            <p style="text-align:left;">Articles publiés ces dernières 48h</p>
         </header>
 
         <div class="articles-list">
@@ -262,19 +299,18 @@ def category():
             <div class="card">
                 <div class="card-meta">
                     <span class="tag">{a['source']}</span>
-                    <span class="date">{a['date'][:16]}</span>
+                    <span class="date">{a['date']}</span>
                 </div>
                 <div class="card-title">{a['title']}</div>
                 <a class="btn" href="/article?url={a['safe_url']}&title={a['safe_title']}&cat={cat_key}">Lire l'article nettoyé</a>
             </div>
-            ''' for a in articles])}
+            ''' for a in articles]) if articles else '<p style="color: var(--text-secondary);">Aucun article publié ces dernières 48 heures.</p>'}
         </div>
     </body>
     </html>
     """
     return render_template_string(html)
 
-# Page de Lecture Nettoyée
 @app.route("/article")
 def article():
     raw_url = request.args.get("url")
@@ -286,7 +322,7 @@ def article():
         
     target_url = unquote(raw_url)
     title = unquote(raw_title)
-    content = fetch_clean_text(target_url)
+    content = fetch_clean_article(target_url)
     
     back_url = f"/category?cat={cat_key}" if cat_key else "/"
     
@@ -300,16 +336,43 @@ def article():
         <style>
             {COMMON_CSS}
             body {{ background: var(--card-bg); }}
-            article {{ font-size: 1.05rem; line-height: 1.8; color: var(--text-primary); margin-top: 20px; white-space: pre-line; }}
+            .controls {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }}
+            .font-btn {{ background: var(--bg-color); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; color: var(--text-primary); cursor: pointer; font-weight: 700; }}
+            article {{ font-size: 1.05rem; line-height: 1.8; color: var(--text-primary); margin-top: 20px; }}
+            article p {{ margin-bottom: 16px; }}
+            article img {{ max-width: 100%; height: auto; border-radius: 12px; margin: 16px 0; display: block; }}
             h1 {{ font-size: 1.5rem; line-height: 1.35; margin-bottom: 12px; }}
+            .actions {{ margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-color); text-align: center; }}
         </style>
     </head>
     <body>
         <a class="back" href="{back_url}">&larr; Retour au flux</a>
-        <header style="text-align: left; border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+        
+        <div class="controls">
+            <span style="font-size: 0.85rem; color: var(--text-secondary);">Taille du texte :</span>
+            <div>
+                <button class="font-btn" onclick="adjustFont(-0.1)">A-</button>
+                <button class="font-btn" onclick="adjustFont(0.1)">A+</button>
+            </div>
+        </div>
+
+        <header style="text-align: left; padding-bottom: 12px;">
             <h1>{title}</h1>
         </header>
-        <article>{content}</article>
+
+        <article id="article-body">{content}</article>
+
+        <div class="actions">
+            <a class="btn-outline" href="{target_url}" target="_blank" rel="noopener">Voir l'article original ↗</a>
+        </div>
+
+        <script>
+            let currentSize = 1.05;
+            function adjustFont(delta) {{
+                currentSize = Math.max(0.85, Math.min(1.5, currentSize + delta));
+                document.getElementById('article-body').style.fontSize = currentSize + 'rem';
+            }}
+        </script>
     </body>
     </html>
     """
