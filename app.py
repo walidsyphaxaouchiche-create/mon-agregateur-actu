@@ -5,12 +5,16 @@ from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
 
-TEST_FEED_URL = "https://www.clubic.com/feed/news.rss"
+# Liste de vos flux RSS
+FEEDS = {
+    "Clubic (Tech)": "https://www.clubic.com/feed/news.rss",
+    "Le Monde (Actu)": "https://www.lemonde.fr/rss/une.xml",
+    "Frandroid (Tech)": "https://www.frandroid.com/feed"
+}
 
 def get_clean_article(url):
     downloaded = trafilatura.fetch_url(url)
     if downloaded:
-        # Extraction du texte brut, sans liens annexes ni pubs
         text = trafilatura.extract(
             downloaded, 
             include_images=True, 
@@ -22,51 +26,51 @@ def get_clean_article(url):
 
 @app.route("/")
 def index():
-    feed = feedparser.parse(TEST_FEED_URL)
-    articles = []
+    all_articles = []
     
-    for idx, entry in enumerate(feed.entries[:10]):
-        # Conservation stricte de la date de publication d'origine
-        published_date = entry.get("published", entry.get("updated", "Date inconnue"))
-        source_name = feed.feed.get("title", "Source d'actualité")
-        
-        articles.append({
-            "id": idx,
-            "title": entry.title,
-            "source": source_name,
-            "date": published_date,
-            "link": entry.link
-        })
-        
+    for source_label, feed_url in FEEDS.items():
+        feed = feedparser.parse(feed_url)
+        for entry in feed.entries[:3]: # 3 derniers articles par source
+            published_date = entry.get("published", entry.get("updated", "Date inconnue"))
+            all_articles.append({
+                "title": entry.title,
+                "source": source_label,
+                "date": published_date,
+                "link": entry.link
+            })
+
     html_template = """
     <!DOCTYPE html>
     <html lang="fr">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Flux Tech</title>
+        <title>Mon Agrégateur</title>
         <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 650px; margin: 20px auto; padding: 0 15px; background: #f4f4f7; color: #222; }
-            h1 { text-align: center; font-size: 1.4rem; color: #111; margin-bottom: 20px; }
-            .card { background: white; padding: 16px; margin-bottom: 12px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
-            .card h2 { margin: 0 0 8px 0; font-size: 1.1rem; line-height: 1.4; }
-            .meta { font-size: 0.8rem; color: #666; margin-bottom: 10px; }
-            .btn { display: inline-block; padding: 6px 12px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; font-size: 0.85rem; }
+            * { box-sizing: border-box; }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 15px; background: #f2f2f7; color: #1c1c1e; }
+            h1 { font-size: 1.5rem; text-align: center; margin-bottom: 20px; }
+            .card { background: #ffffff; padding: 16px; margin-bottom: 12px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+            .tag { display: inline-block; background: #e5e5ea; font-size: 0.75rem; padding: 3px 8px; border-radius: 6px; font-weight: 600; margin-bottom: 8px; color: #3a3a3c; }
+            .title { font-size: 1.05rem; font-weight: 600; margin: 0 0 8px 0; line-height: 1.35; }
+            .date { font-size: 0.78rem; color: #8e8e93; margin-bottom: 12px; }
+            .btn { display: block; text-align: center; padding: 10px; background: #007aff; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 500; font-size: 0.9rem; }
         </style>
     </head>
     <body>
-        <h1>Flux Actualités Tech</h1>
+        <h1>Mon Agrégateur</h1>
         {% for a in articles %}
             <div class="card">
-                <h2>{{ a.title }}</h2>
-                <div class="meta">Source : <strong>{{ a.source }}</strong> | {{ a.date }}</div>
+                <span class="tag">{{ a.source }}</span>
+                <div class="title">{{ a.title }}</div>
+                <div class="date">Publié le : {{ a.date }}</div>
                 <a class="btn" href="/article?url={{ a.link }}&title={{ a.title }}&date={{ a.date }}&source={{ a.source }}">Lire l'article nettoyé</a>
             </div>
         {% endfor %}
     </body>
     </html>
     """
-    return render_template_string(html_template, articles=articles)
+    return render_template_string(html_template, articles=all_articles)
 
 @app.route("/article")
 def article():
@@ -85,17 +89,17 @@ def article():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{{ title }}</title>
         <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 650px; margin: 20px auto; padding: 0 15px; background: #fff; color: #111; line-height: 1.6; }
-            .back { display: inline-block; margin-bottom: 15px; color: #007bff; text-decoration: none; font-weight: 500; }
-            h1 { font-size: 1.5rem; margin-bottom: 8px; line-height: 1.3; }
-            .meta { font-size: 0.85rem; color: #666; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 15px; background: #fff; color: #1c1c1e; line-height: 1.6; }
+            .back { display: inline-block; margin-bottom: 15px; color: #007aff; text-decoration: none; font-weight: 600; font-size: 0.95rem; }
+            h1 { font-size: 1.4rem; margin-bottom: 6px; line-height: 1.3; }
+            .meta { font-size: 0.8rem; color: #8e8e93; border-bottom: 1px solid #e5e5ea; padding-bottom: 12px; margin-bottom: 16px; }
             .content { font-size: 1rem; white-space: pre-line; }
         </style>
     </head>
     <body>
         <a class="back" href="/">&larr; Retour au flux</a>
         <h1>{{ title }}</h1>
-        <div class="meta">Source : <strong>{{ source }}</strong> | Date d'origine : {{ date }}</div>
+        <div class="meta">Source : <strong>{{ source }}</strong> | {{ date }}</div>
         <div class="content">{{ content }}</div>
     </body>
     </html>
