@@ -16,8 +16,14 @@ CACHE_FEEDS = {}         # {cat_key: (timestamp, articles_list)}
 CACHE_ARTICLES = {}      # {url: (timestamp, raw_text)}
 CACHE_TRANSLATIONS = {}  # {(url, target_lang): (timestamp, title, content)}
 
-FEED_CACHE_TTL = 600      # 10 minutes pour les flux
-ARTICLE_CACHE_TTL = 86400  # 24 heures pour les articles et traductions
+FEED_CACHE_TTL = 600      # 10 minutes
+ARTICLE_CACHE_TTL = 86400  # 24 heures
+
+BLOCKED_PHRASES = [
+    "please enable js", "disable any ad blocker", "enable javascript",
+    "access denied", "cloudflare", "captcha", "security check",
+    "checking your browser", "bot detection", "pardon our interruption"
+]
 
 CATEGORIES = {
     "politique": {
@@ -224,7 +230,6 @@ COMMON_CSS = """
         border-radius: 10px;
         cursor: pointer;
         font-size: 1.1rem;
-        transition: background 0.2s;
     }
     .btn-outline {
         display: inline-block;
@@ -262,13 +267,13 @@ function getFavs() {
 function isFav(url) {
     return getFavs().some(item => item.url === url);
 }
-function toggleFav(url, title, source, date, cat, img) {
+function toggleFav(url, title, source, date, cat, img, summary) {
     let favs = getFavs();
     const idx = favs.findIndex(item => item.url === url);
     if (idx >= 0) {
         favs.splice(idx, 1);
     } else {
-        favs.push({ url, title, source, date, cat, img });
+        favs.push({ url, title, source, date, cat, img, summary });
     }
     localStorage.setItem('news_favs', JSON.stringify(favs));
     updateFavBtns();
@@ -312,51 +317,62 @@ def extract_image_from_entry(entry):
             return m.group(1)
     return None
 
-def fetch_clean_article(url):
+def fetch_clean_article(url, summary_fallback=""):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
     }
+    extracted_text = ""
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        text = trafilatura.extract(response.text, include_links=False, output_format="txt")
-        return text or "Impossible d'extraire le texte brut de cet article."
-    except Exception as e:
-        return f"Erreur lors du chargement : {str(e)}"
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            extracted_text = trafilatura.extract(resp.text, include_links=False, output_format="txt") or ""
+    except Exception:
+        extracted_text = ""
+
+    # Détection des blocages anti-bot / JavaScript
+    lower_text = extracted_text.lower()
+    is_blocked = any(phrase in lower_text for phrase in BLOCKED_PHRASES)
+
+    if not extracted_text or len(extracted_text.strip()) < 100 or is_blocked:
+        if summary_fallback and len(summary_fallback.strip()) > 15:
+            return f"Résumé de l'article :\n\n{summary_fallback}"
+        return "Le contenu complet de cet article est protégé par le site d'origine. Veuillez cliquer sur 'Voir l'original ↗' ci-dessous pour le lire directement sur la source."
+
+    return extracted_text
 
 def translate_text(text, target_lang):
-    if not text or target_lang == "original":
+    if not text or target_lang == "original" or target_lang not in ["fr", "en"]:
         return text
-    try:
-        translator = GoogleTranslator(source='auto', target=target_lang)
-        paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
-        
-        chunks = []
-        curr_chunk = []
-        curr_len = 0
-        
-        for p in paragraphs:
-            if curr_len + len(p) > 2500:
-                chunks.append("\n\n".join(curr_chunk))
-                curr_chunk = [p]
-                curr_len = len(p)
-            else:
-                curr_chunk.append(p)
-                curr_len += len(p)
-        if curr_chunk:
-            chunks.append("\n\n".join(curr_chunk))
+    
+    paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
+    if not paragraphs:
+        return text
 
-        translated_chunks = []
-        for chunk in chunks:
+    translator = GoogleTranslator(source='auto', target=target_lang)
+    translated_paragraphs = []
+    
+    chunk = ""
+    for p in paragraphs:
+        if len(chunk) + len(p) < 900:
+            chunk += ("\n\n" if chunk else "") + p
+        else:
             try:
                 res = translator.translate(chunk)
-                translated_chunks.append(res if res else chunk)
+                translated_paragraphs.append(res if res else chunk)
             except Exception:
-                translated_chunks.append(chunk)
-                
-        return "\n\n".join(translated_chunks)
-    except Exception as e:
-        print("Erreur globale de traduction :", e)
-        return text
+                translated_paragraphs.append(chunk)
+            chunk = p
+            
+    if chunk:
+        try:
+            res = translator.translate(chunk)
+            translated_paragraphs.append(res if res else chunk)
+        except Exception:
+            translated_paragraphs.append(chunk)
+
+    return "\n\n".join(translated_paragraphs)
 
 @app.route("/")
 def index():
@@ -406,7 +422,6 @@ def category():
     cat_info = CATEGORIES[cat_key]
     now_time = time.time()
     
-    # Vérification du cache de flux
     if cat_key in CACHE_FEEDS and (now_time - CACHE_FEEDS[cat_key]['time'] < FEED_CACHE_TTL):
         articles = CACHE_FEEDS[cat_key]['articles']
     else:
@@ -420,6 +435,8 @@ def category():
                         continue
                         
                     img_url = extract_image_from_entry(entry)
+                    summary_raw = entry.get("summary", "") or entry.get("description", "")
+                    summary_clean = re.sub(r'<[^>]+>', '', summary_raw).strip()
                     
                     articles.append({
                         "dt": dt or datetime.now(timezone.utc),
@@ -427,8 +444,10 @@ def category():
                         "source": source_name,
                         "date": formatted_date,
                         "img": img_url or "",
+                        "summary": summary_clean,
                         "safe_url": quote(entry.link, safe=""),
                         "safe_title": quote(entry.title, safe=""),
+                        "safe_summary": quote(summary_clean, safe=""),
                         "raw_url": entry.link
                     })
             except Exception:
@@ -453,8 +472,8 @@ def category():
                 </div>
             </div>
             <div class="card-actions">
-                <a class="btn" href="/article?url={a['safe_url']}&title={a['safe_title']}&cat={cat_key}&lang=fr">Lire l'article</a>
-                <button class="btn-fav" data-url="{a['raw_url']}" onclick="toggleFav('{a['raw_url']}', '{quote(a['title'], safe='')}', '{a['source']}', '{a['date']}', '{cat_key}', '{a['img']}')">📌</button>
+                <a class="btn" href="/article?url={a['safe_url']}&title={a['safe_title']}&cat={cat_key}&summary={a['safe_summary']}&lang=fr">Lire l'article</a>
+                <button class="btn-fav" data-url="{a['raw_url']}" onclick="toggleFav('{a['raw_url']}', '{quote(a['title'], safe='')}', '{a['source']}', '{a['date']}', '{cat_key}', '{a['img']}', '{a['safe_summary']}')">📌</button>
             </div>
         </div>
         '''
@@ -489,6 +508,7 @@ def category():
 def article():
     raw_url = request.args.get("url")
     raw_title = request.args.get("title", "Article")
+    raw_summary = request.args.get("summary", "")
     cat_key = request.args.get("cat", "")
     target_lang = request.args.get("lang", "fr")
     
@@ -497,20 +517,19 @@ def article():
         
     target_url = unquote(raw_url)
     title = unquote(raw_title)
+    summary_fallback = unquote(raw_summary)
     now_time = time.time()
     
     cache_key = (target_url, target_lang)
     
-    # Récupération depuis le cache de traduction
     if cache_key in CACHE_TRANSLATIONS and (now_time - CACHE_TRANSLATIONS[cache_key]['time'] < ARTICLE_CACHE_TTL):
         translated_title = CACHE_TRANSLATIONS[cache_key]['title']
         translated_content = CACHE_TRANSLATIONS[cache_key]['content']
     else:
-        # Récupération de l'article brut
         if target_url in CACHE_ARTICLES and (now_time - CACHE_ARTICLES[target_url]['time'] < ARTICLE_CACHE_TTL):
             raw_content = CACHE_ARTICLES[target_url]['text']
         else:
-            raw_content = fetch_clean_article(target_url)
+            raw_content = fetch_clean_article(target_url, summary_fallback)
             CACHE_ARTICLES[target_url] = {'time': now_time, 'text': raw_content}
             
         translated_title = translate_text(title, target_lang)
@@ -552,8 +571,8 @@ def article():
         
         <div class="top-bar">
             <div class="lang-switch">
-                <a class="{btn_fr_class}" href="/article?url={quote(raw_url, safe='')}&title={quote(raw_title, safe='')}&cat={cat_key}&lang=fr">🇫🇷 Français</a>
-                <a class="{btn_en_class}" href="/article?url={quote(raw_url, safe='')}&title={quote(raw_title, safe='')}&cat={cat_key}&lang=en">🇬🇧 English</a>
+                <a class="{btn_fr_class}" href="/article?url={quote(raw_url, safe='')}&title={quote(raw_title, safe='')}&cat={cat_key}&summary={quote(raw_summary, safe='')}&lang=fr">🇫🇷 Français</a>
+                <a class="{btn_en_class}" href="/article?url={quote(raw_url, safe='')}&title={quote(raw_title, safe='')}&cat={cat_key}&summary={quote(raw_summary, safe='')}&lang=en">🇬🇧 English</a>
             </div>
             <button id="speech-btn" class="audio-btn" onclick="toggleAudio()">🔊 Écouter</button>
         </div>
@@ -566,37 +585,69 @@ def article():
 
         <div class="actions">
             <a class="btn-outline" href="{target_url}" target="_blank" rel="noopener">Voir l'original ↗</a>
-            <button class="btn-fav" data-url="{target_url}" onclick="toggleFav('{target_url}', '{quote(raw_title, safe='')}', 'Source', '', '{cat_key}', '')">📌</button>
+            <button class="btn-fav" data-url="{target_url}" onclick="toggleFav('{target_url}', '{quote(raw_title, safe='')}', 'Source', '', '{cat_key}', '', '{quote(raw_summary, safe='')}')">📌</button>
         </div>
 
         {BOOKMARK_JS}
         <script>
             let synth = window.speechSynthesis;
-            let utterance = null;
+            let speechChunks = [];
+            let currentChunk = 0;
+            let isSpeaking = false;
+
+            function stopAudio() {{
+                synth.cancel();
+                isSpeaking = false;
+                document.getElementById('speech-btn').innerHTML = "🔊 Écouter";
+            }}
 
             function toggleAudio() {{
                 const btn = document.getElementById('speech-btn');
-                if (synth.speaking && !synth.paused) {{
-                    synth.pause();
-                    btn.innerHTML = "▶️ Reprendre";
+                if (isSpeaking) {{
+                    stopAudio();
                     return;
                 }}
-                if (synth.paused) {{
-                    synth.resume();
-                    btn.innerHTML = "⏸️ Pause";
+
+                const fullText = document.getElementById('article-body').innerText;
+                if (!fullText || fullText.length < 5) return;
+
+                // Découpage en phrases pour éviter le bug de coupure audio
+                speechChunks = fullText.match(/[^.!?]+[.!?]+/g) || [fullText];
+                currentChunk = 0;
+                isSpeaking = true;
+                btn.innerHTML = "⏹️ Arrêter";
+
+                speakNext();
+            }}
+
+            function speakNext() {{
+                if (!isSpeaking || currentChunk >= speechChunks.length) {{
+                    stopAudio();
                     return;
                 }}
-                
-                const text = document.getElementById('article-body').innerText;
-                utterance = new SpeechSynthesisUtterance(text);
+
+                const chunkText = speechChunks[currentChunk].trim();
+                if (!chunkText) {{
+                    currentChunk++;
+                    speakNext();
+                    return;
+                }}
+
+                const utterance = new SpeechSynthesisUtterance(chunkText);
                 utterance.lang = "{target_lang}" === "en" ? "en-US" : "fr-FR";
-                
+                utterance.rate = 1.0;
+
                 utterance.onend = function() {{
-                    btn.innerHTML = "🔊 Écouter";
+                    currentChunk++;
+                    speakNext();
                 }};
-                
+
+                utterance.onerror = function() {{
+                    currentChunk++;
+                    speakNext();
+                }};
+
                 synth.speak(utterance);
-                btn.innerHTML = "⏸️ Pause";
             }}
         </script>
     </body>
@@ -638,6 +689,7 @@ def favorites():
                     const title = decodeURIComponent(a.title);
                     const safeTitle = encodeURIComponent(title);
                     const safeUrl = encodeURIComponent(a.url);
+                    const safeSummary = a.summary || '';
                     const imgTag = a.img ? `<img class="card-thumb" src="${{a.img}}" loading="lazy" alt="" />` : '';
                     
                     html += `
@@ -653,7 +705,7 @@ def favorites():
                             </div>
                         </div>
                         <div class="card-actions">
-                            <a class="btn" href="/article?url=${{safeUrl}}&title=${{safeTitle}}&cat=${{a.cat}}&lang=fr">Lire l'article</a>
+                            <a class="btn" href="/article?url=${{safeUrl}}&title=${{safeTitle}}&cat=${{a.cat}}&summary=${{safeSummary}}&lang=fr">Lire l'article</a>
                             <button class="btn-fav" onclick="removeFav('${{a.url}}')">🗑️</button>
                         </div>
                     </div>
