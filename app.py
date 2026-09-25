@@ -5,6 +5,7 @@ import feedparser
 import trafilatura
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote, unquote
+from deep_translator import GoogleTranslator
 from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
@@ -39,6 +40,15 @@ CATEGORIES = {
             "Clubic": "https://www.clubic.com/feed/news.rss",
             "Frandroid": "https://www.frandroid.com/feed",
             "L'Usine Digitale": "https://www.usine-digitale.fr/rss"
+        }
+    },
+    "philosophie": {
+        "name": "Philosophie & Pensée",
+        "icon": "🧠",
+        "feeds": {
+            "Philosophie Magazine": "https://www.philomag.com/rss.xml",
+            "Aeon Essays (En)": "https://aeon.co/feed.rss",
+            "France Culture (Idées)": "https://www.radiofrance.fr/franceculture/rss"
         }
     },
     "sciences": {
@@ -173,12 +183,10 @@ COMMON_CSS = """
 """
 
 def parse_and_filter_date(entry):
-    """ Parse la date de publication et vérifie si elle date de moins de 48h """
     parsed_time = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed_time:
         dt = datetime(*parsed_time[:6], tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
-        # Filtre les articles de plus de 48 heures
         if (now - dt) > timedelta(hours=48):
             return None, None
         formatted_date = dt.strftime("%d/%m/%Y à %H:%M")
@@ -191,25 +199,31 @@ def fetch_clean_article(url):
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        # Activer l'extraction d'images et le rendu HTML
-        html_content = trafilatura.extract(
-            response.text,
-            include_images=True,
-            include_links=False,
-            output_format="html"
-        )
-        if html_content:
-            return html_content
-        
-        # Secours en mode texte brut
         text = trafilatura.extract(response.text, include_links=False, output_format="txt")
-        if text:
-            paragraphs = text.split("\n\n")
-            return "".join([f"<p>{p.strip()}</p>" for p in paragraphs if p.strip()])
-            
-        return "<p>Impossible d'extraire le texte brut de cet article.</p>"
+        return text or "Impossible d'extraire le texte brut de cet article."
     except Exception as e:
-        return f"<p>Erreur lors du chargement : {str(e)}</p>"
+        return f"Erreur lors du chargement : {str(e)}"
+
+def translate_text(text, target_lang):
+    if not text or target_lang == "original":
+        return text
+    try:
+        translator = GoogleTranslator(source='auto', target=target_lang)
+        paragraphs = text.split('\n')
+        translated = []
+        for p in paragraphs:
+            if p.strip():
+                # Découpage si le paragraphe dépasse la limite
+                if len(p) > 3500:
+                    chunks = [p[i:i+3500] for i in range(0, len(p), 3500)]
+                    translated.append("".join([translator.translate(c) for c in chunks]))
+                else:
+                    translated.append(translator.translate(p))
+            else:
+                translated.append("")
+        return "\n".join(translated)
+    except Exception:
+        return text
 
 @app.route("/")
 def index():
@@ -256,10 +270,8 @@ def category():
     for source_name, feed_url in cat_info["feeds"].items():
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:8]: # Recherche sur les 8 derniers articles
+            for entry in feed.entries[:8]:
                 dt, formatted_date = parse_and_filter_date(entry)
-                
-                # Ignorer si l'article a plus de 48h
                 if formatted_date is None:
                     continue
                     
@@ -274,7 +286,6 @@ def category():
         except Exception:
             continue
 
-    # Trier du plus récent au plus ancien
     articles.sort(key=lambda x: x["dt"], reverse=True)
 
     html = f"""
@@ -302,7 +313,7 @@ def category():
                     <span class="date">{a['date']}</span>
                 </div>
                 <div class="card-title">{a['title']}</div>
-                <a class="btn" href="/article?url={a['safe_url']}&title={a['safe_title']}&cat={cat_key}">Lire l'article nettoyé</a>
+                <a class="btn" href="/article?url={a['safe_url']}&title={a['safe_title']}&cat={cat_key}&lang=fr">Lire l'article nettoyé</a>
             </div>
             ''' for a in articles]) if articles else '<p style="color: var(--text-secondary);">Aucun article publié ces dernières 48 heures.</p>'}
         </div>
@@ -316,31 +327,40 @@ def article():
     raw_url = request.args.get("url")
     raw_title = request.args.get("title", "Article")
     cat_key = request.args.get("cat", "")
+    target_lang = request.args.get("lang", "fr")
     
     if not raw_url:
         return "URL manquante.", 400
         
     target_url = unquote(raw_url)
     title = unquote(raw_title)
-    content = fetch_clean_article(target_url)
+    
+    # Chargement et traduction du contenu
+    raw_content = fetch_clean_article(target_url)
+    translated_title = translate_text(title, target_lang)
+    translated_content = translate_text(raw_content, target_lang)
     
     back_url = f"/category?cat={cat_key}" if cat_key else "/"
     
+    btn_fr_class = "btn-lang active" if target_lang == "fr" else "btn-lang"
+    btn_en_class = "btn-lang active" if target_lang == "en" else "btn-lang"
+    
     html = f"""
     <!DOCTYPE html>
-    <html lang="fr">
+    <html lang="{target_lang}">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{title}</title>
+        <title>{translated_title}</title>
         <style>
             {COMMON_CSS}
             body {{ background: var(--card-bg); }}
-            .controls {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }}
+            .top-bar {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); flex-wrap: wrap; gap: 10px; }}
+            .lang-switch {{ display: flex; gap: 6px; }}
+            .btn-lang {{ text-decoration: none; padding: 6px 12px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-primary); }}
+            .btn-lang.active {{ background: var(--accent-color); color: #fff; border-color: var(--accent-color); }}
             .font-btn {{ background: var(--bg-color); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 6px; color: var(--text-primary); cursor: pointer; font-weight: 700; }}
-            article {{ font-size: 1.05rem; line-height: 1.8; color: var(--text-primary); margin-top: 20px; }}
-            article p {{ margin-bottom: 16px; }}
-            article img {{ max-width: 100%; height: auto; border-radius: 12px; margin: 16px 0; display: block; }}
+            article {{ font-size: 1.05rem; line-height: 1.8; color: var(--text-primary); margin-top: 20px; white-space: pre-line; }}
             h1 {{ font-size: 1.5rem; line-height: 1.35; margin-bottom: 12px; }}
             .actions {{ margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-color); text-align: center; }}
         </style>
@@ -348,8 +368,11 @@ def article():
     <body>
         <a class="back" href="{back_url}">&larr; Retour au flux</a>
         
-        <div class="controls">
-            <span style="font-size: 0.85rem; color: var(--text-secondary);">Taille du texte :</span>
+        <div class="top-bar">
+            <div class="lang-switch">
+                <a class="{btn_fr_class}" href="/article?url={quote(raw_url, safe='')}&title={quote(raw_title, safe='')}&cat={cat_key}&lang=fr">🇫🇷 Français</a>
+                <a class="{btn_en_class}" href="/article?url={quote(raw_url, safe='')}&title={quote(raw_title, safe='')}&cat={cat_key}&lang=en">🇬🇧 English</a>
+            </div>
             <div>
                 <button class="font-btn" onclick="adjustFont(-0.1)">A-</button>
                 <button class="font-btn" onclick="adjustFont(0.1)">A+</button>
@@ -357,10 +380,10 @@ def article():
         </div>
 
         <header style="text-align: left; padding-bottom: 12px;">
-            <h1>{title}</h1>
+            <h1>{translated_title}</h1>
         </header>
 
-        <article id="article-body">{content}</article>
+        <article id="article-body">{translated_content}</article>
 
         <div class="actions">
             <a class="btn-outline" href="{target_url}" target="_blank" rel="noopener">Voir l'article original ↗</a>
