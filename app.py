@@ -1,8 +1,8 @@
 import os
-import base64
 import requests
 import feedparser
 import trafilatura
+from urllib.parse import quote, unquote
 from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
@@ -13,40 +13,45 @@ FEEDS = {
     "Frandroid (Tech)": "https://www.frandroid.com/feed"
 }
 
-def encode_url(url):
-    return base64.urlsafe_b64encode(url.encode()).decode()
-
-def decode_url(encoded_url):
-    return base64.urlsafe_b64decode(encoded_url.encode()).decode()
-
-def get_clean_article(url):
+def fetch_and_clean(url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
     try:
-        # Simulation d'un navigateur classique pour ne pas être bloqué
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            text = trafilatura.extract(res.text, include_links=False, output_format="txt")
-            return text or "Impossible d'extraire le texte brut de cet article."
-        return f"Erreur de chargement de la source (Code HTTP : {res.status_code})."
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        # Extraction automatique du titre et du texte nettoyé
+        extracted = trafilatura.bare_extraction(response.text)
+        if extracted and extracted.get("text"):
+            return {
+                "title": extracted.get("title") or "Article",
+                "content": extracted.get("text")
+            }
+        
+        # Secours si bare_extraction ne renvoie pas tout
+        text = trafilatura.extract(response.text, include_links=False)
+        if text:
+            return {"title": "Article", "content": text}
+            
+        return {"title": "Information", "content": "Impossible d'extraire le texte brut de cet article."}
     except Exception as e:
-        return f"Erreur lors de la récupération : {str(e)}"
+        return {"title": "Erreur", "content": f"Impossible de charger la page source : {str(e)}"}
 
 @app.route("/")
 def index():
     all_articles = []
-    
     for source_label, feed_url in FEEDS.items():
         try:
             feed = feedparser.parse(feed_url)
             for entry in feed.entries[:3]:
                 published_date = entry.get("published", entry.get("updated", "Date inconnue"))
+                # Encodage sécurisé de l'URL
+                safe_url = quote(entry.link, safe="")
                 all_articles.append({
                     "title": entry.title,
                     "source": source_label,
                     "date": published_date,
-                    "encoded_link": encode_url(entry.link)
+                    "safe_url": safe_url
                 })
         except Exception:
             continue
@@ -76,7 +81,7 @@ def index():
                 <span class="tag">{{ a.source }}</span>
                 <div class="title">{{ a.title }}</div>
                 <div class="date">Publié le : {{ a.date }}</div>
-                <a class="btn" href="/article?id={{ a.encoded_link }}&title={{ a.title|e }}&date={{ a.date|e }}&source={{ a.source|e }}">Lire l'article nettoyé</a>
+                <a class="btn" href="/article?url={{ a.safe_url }}">Lire l'article nettoyé</a>
             </div>
         {% endfor %}
     </body>
@@ -86,22 +91,12 @@ def index():
 
 @app.route("/article")
 def article():
-    try:
-        encoded_id = request.args.get("id")
-        title = request.args.get("title", "Article")
-        date = request.args.get("date", "")
-        source = request.args.get("source", "")
+    raw_url = request.args.get("url")
+    if not raw_url:
+        return "URL manquante.", 400
         
-        if not encoded_id:
-            content = "L'URL de cet article est invalide."
-        else:
-            url = decode_url(encoded_id)
-            content = get_clean_article(url)
-    except Exception as err:
-        content = f"Une erreur d'affichage est survenue : {str(err)}"
-        title = "Erreur"
-        source = ""
-        date = ""
+    target_url = unquote(raw_url)
+    data = fetch_and_clean(target_url)
     
     html_template = """
     <!DOCTYPE html>
@@ -109,24 +104,22 @@ def article():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{{ title }}</title>
+        <title>{{ data.title }}</title>
         <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 15px; background: #fff; color: #1c1c1e; line-height: 1.6; }
             .back { display: inline-block; margin-bottom: 15px; color: #007aff; text-decoration: none; font-weight: 600; font-size: 0.95rem; }
-            h1 { font-size: 1.4rem; margin-bottom: 6px; line-height: 1.3; }
-            .meta { font-size: 0.8rem; color: #8e8e93; border-bottom: 1px solid #e5e5ea; padding-bottom: 12px; margin-bottom: 16px; }
+            h1 { font-size: 1.4rem; margin-bottom: 16px; line-height: 1.3; }
             .content { font-size: 1rem; white-space: pre-line; }
         </style>
     </head>
     <body>
         <a class="back" href="/">&larr; Retour au flux</a>
-        <h1>{{ title }}</h1>
-        <div class="meta">Source : <strong>{{ source }}</strong> | {{ date }}</div>
-        <div class="content">{{ content }}</div>
+        <h1>{{ data.title }}</h1>
+        <div class="content">{{ data.content }}</div>
     </body>
     </html>
     """
-    return render_template_string(html_template, title=title, source=source, date=date, content=content)
+    return render_template_string(html_template, data=data)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
