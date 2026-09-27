@@ -11,113 +11,105 @@ from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
 
-# --- SYSTÈME DE CACHE EN MÉMOIRE ---
+# --- IN-MEMORY CACHE ---
 CACHE_FEEDS = {}         # {cat_key: (timestamp, articles_list)}
 CACHE_ARTICLES = {}      # {url: (timestamp, raw_text)}
-CACHE_TRANSLATIONS = {}  # {(url, target_lang): (timestamp, title, content)}
+CACHE_TRANSLATIONS = {}  # {url: (timestamp, title, content)}
 
 FEED_CACHE_TTL = 600      # 10 minutes
-ARTICLE_CACHE_TTL = 86400  # 24 heures
-
-BLOCKED_PHRASES = [
-    "please enable js", "disable any ad blocker", "enable javascript",
-    "access denied", "cloudflare", "captcha", "security check",
-    "checking your browser", "bot detection", "pardon our interruption"
-]
+ARTICLE_CACHE_TTL = 86400  # 24 hours
 
 CATEGORIES = {
-    "politique": {
-        "name": "Politique & Géopolitique",
+    "politics": {
+        "name": "Politics & World",
         "icon": "🌐",
         "feeds": {
-            "Le Monde (Politique)": "https://www.lemonde.fr/politique/rss_full.xml",
-            "BBC News (World)": "http://feeds.bbci.co.uk/news/world/rss.xml",
-            "Courrier International": "https://www.courrierinternational.com/feed/category/690/rss.xml",
-            "Le Figaro (International)": "https://www.lefigaro.fr/rss/figaro_international.xml"
+            "BBC News": "http://feeds.bbci.co.uk/news/world/rss.xml",
+            "Reuters": "https://news.google.com/rss/search?q=site:reuters.com+world+when:2d&hl=en-US&gl=US&ceid=US:en",
+            "Al Jazeera": "https://www.aljazeera.com/xml/rss/all.xml",
+            "AP News": "https://news.google.com/rss/search?q=site:apnews.com+when:2d&hl=en-US&gl=US&ceid=US:en"
         }
     },
-    "economie": {
-        "name": "Économie & Finance",
+    "economy": {
+        "name": "Business & Economy",
         "icon": "📈",
         "feeds": {
-            "Les Échos": "https://www.lesechos.fr/rss/rss_une.xml",
-            "La Tribune": "https://www.latribune.fr/feed/full.xml",
-            "MarketWatch (Business)": "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+            "Bloomberg": "https://news.google.com/rss/search?q=site:bloomberg.com+when:2d&hl=en-US&gl=US&ceid=US:en",
+            "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+            "Financial Times": "https://news.google.com/rss/search?q=site:ft.com+when:2d&hl=en-US&gl=US&ceid=US:en",
+            "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html"
         }
     },
     "tech": {
-        "name": "Technologies & IA",
+        "name": "Tech & AI",
         "icon": "💻",
         "feeds": {
             "The Verge": "https://www.theverge.com/rss/index.xml",
             "Ars Technica": "https://feeds.arstechnica.com/arstechnica/index",
-            "BleepingComputer": "https://www.bleepingcomputer.com/feed/",
-            "Clubic": "https://www.clubic.com/feed/news.rss",
-            "Frandroid": "https://www.frandroid.com/feed",
-            "L'Usine Digitale": "https://www.usine-digitale.fr/rss"
+            "TechCrunch": "https://techcrunch.com/feed/",
+            "Wired": "https://www.wired.com/feed/category/gear/latest/rss",
+            "BleepingComputer": "https://www.bleepingcomputer.com/feed/"
         }
     },
-    "philosophie": {
-        "name": "Philosophie & Pensée",
+    "philosophy": {
+        "name": "Philosophy & Thought",
         "icon": "🧠",
         "feeds": {
-            "Philosophie Magazine": "https://www.philomag.com/rss.xml",
-            "Aeon Essays (En)": "https://aeon.co/feed.rss",
-            "France Culture (Idées)": "https://www.radiofrance.fr/franceculture/rss"
+            "Aeon Essays": "https://aeon.co/feed.rss",
+            "Psyche": "https://psyche.co/feed.rss",
+            "The Conversation": "https://news.google.com/rss/search?q=philosophy+society+when:3d&hl=en-US&gl=US&ceid=US:en"
         }
     },
     "cinema": {
-        "name": "Cinéma & Séries",
+        "name": "Movies & TV",
         "icon": "🎬",
         "feeds": {
-            "Variety (En)": "https://variety.com/feed/",
-            "IndieWire (En)": "https://www.indiewire.com/feed/",
-            "Première": "https://www.premiere.fr/rss/actus.xml",
-            "Allociné": "https://www.allocine.fr/rss/news.xml"
+            "Variety": "https://variety.com/feed/",
+            "IndieWire": "https://www.indiewire.com/feed/",
+            "Hollywood Reporter": "https://news.google.com/rss/search?q=site:hollywoodreporter.com+when:2d&hl=en-US&gl=US&ceid=US:en"
         }
     },
     "anime": {
         "name": "Anime & Manga",
         "icon": "⛩️",
         "feeds": {
-            "Anime News Network (En)": "https://www.animenewsnetwork.com/news/rss.xml",
-            "Manga-News": "https://www.manga-news.com/index.php/feed/rss",
-            "Sakuga Blog (En)": "https://blog.sakugabooru.com/feed/"
+            "Anime News Network": "https://www.animenewsnetwork.com/news/rss.xml",
+            "Crunchyroll News": "https://news.google.com/rss/search?q=site:crunchyroll.com/news+when:2d&hl=en-US&gl=US&ceid=US:en",
+            "Sakuga Blog": "https://blog.sakugabooru.com/feed/"
         }
     },
-    "sciences": {
-        "name": "Sciences & Environnement",
+    "science": {
+        "name": "Science & Space",
         "icon": "🔬",
         "feeds": {
-            "Futura Sciences": "https://www.futura-sciences.com/rss/actualites.xml",
-            "Reporterre": "https://reporterre.net/spip.php?page=backend",
-            "Nature News": "https://www.nature.com/nature.rss"
+            "Nature News": "https://www.nature.com/nature.rss",
+            "SciTechDaily": "https://scitechdaily.com/feed/",
+            "Live Science": "https://www.livescience.com/feeds/all"
         }
     },
-    "sante": {
-        "name": "Santé & Médecine",
+    "health": {
+        "name": "Health & Medicine",
         "icon": "🩺",
         "feeds": {
-            "Inserm": "https://www.inserm.fr/feed/",
-            "Futura Santé": "https://www.futura-sciences.com/rss/sante/actualites.xml"
+            "Medical News Today": "https://www.medicalnewstoday.com/feed",
+            "Healthline": "https://news.google.com/rss/search?q=site:healthline.com+when:3d&hl=en-US&gl=US&ceid=US:en"
         }
     },
-    "sport": {
-        "name": "Sport",
+    "sports": {
+        "name": "Sports",
         "icon": "⚽",
         "feeds": {
-            "L'Équipe": "https://www.lequipe.fr/rss/actu_rss.xml",
-            "RMC Sport": "https://rmcsport.bfmtv.com/rss/fil-info/",
-            "BBC Sport": "http://feeds.bbci.co.uk/sport/rss.xml"
+            "BBC Sport": "http://feeds.bbci.co.uk/sport/rss.xml",
+            "ESPN": "https://www.espn.com/espn/rss/news",
+            "The Athletic": "https://news.google.com/rss/search?q=site:theathletic.com+when:2d&hl=en-US&gl=US&ceid=US:en"
         }
     },
     "culture": {
-        "name": "Culture, Société & Médias",
+        "name": "Culture & Society",
         "icon": "🎭",
         "feeds": {
-            "France Culture": "https://www.radiofrance.fr/franceculture/rss",
-            "Télérama": "https://www.telerama.fr/rss/actu.xml",
-            "Le Monde Diplomatique": "https://www.monde-diplomatique.fr/rss/"
+            "The Atlantic": "https://news.google.com/rss/search?q=site:theatlantic.com+when:3d&hl=en-US&gl=US&ceid=US:en",
+            "The New Yorker": "https://www.newyorker.com/feed/everything"
         }
     }
 }
@@ -153,7 +145,7 @@ COMMON_CSS = """
     }
     header { text-align: center; margin-bottom: 24px; padding-top: 10px; }
     header h1 { font-size: 2rem; font-weight: 800; letter-spacing: -0.5px; }
-    header p { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; text-transform: capitalize; }
+    header p { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; }
     
     .category-grid {
         display: grid;
@@ -297,9 +289,9 @@ def parse_and_filter_date(entry):
         now = datetime.now(timezone.utc)
         if (now - dt) > timedelta(hours=48):
             return None, None
-        formatted_date = dt.strftime("%d/%m à %H:%M")
+        formatted_date = dt.strftime("%b %d, %H:%M")
         return dt, formatted_date
-    return None, "Aujourd'hui"
+    return None, "Today"
 
 def extract_image_from_entry(entry):
     if "media_content" in entry and len(entry.media_content) > 0:
@@ -318,39 +310,59 @@ def extract_image_from_entry(entry):
     return None
 
 def fetch_clean_article(url, summary_fallback=""):
+    """
+    Primary method uses Jina AI Reader (https://r.jina.ai/)
+    Bypasses Cloudflare & Bot Blockers seamlessly!
+    """
+    jina_url = f"https://r.jina.ai/{url}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "X-No-Cache": "true"
     }
-    extracted_text = ""
+    
+    # 1. Try Jina Reader
+    try:
+        resp = requests.get(jina_url, headers=headers, timeout=12)
+        if resp.status_code == 200 and len(resp.text.strip()) > 150:
+            content = resp.text
+            # Remove Jina markdown headers if present
+            if "Markdown Content:" in content:
+                content = content.split("Markdown Content:", 1)[1]
+            
+            # Clean markdown links/images for clean reading
+            clean_text = re.sub(r'!?\[.*?\]\(.*?\)', '', content)
+            clean_text = re.sub(r'\n{3,}', '\n\n', clean_text).strip()
+            
+            if len(clean_text) > 100:
+                return clean_text
+    except Exception:
+        pass
+
+    # 2. Fallback to Direct Trafilatura Extraction
     try:
         resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code == 200:
-            extracted_text = trafilatura.extract(resp.text, include_links=False, output_format="txt") or ""
+            text = trafilatura.extract(resp.text, include_links=False, output_format="txt") or ""
+            if text and len(text.strip()) > 100:
+                return text
     except Exception:
-        extracted_text = ""
+        pass
 
-    # Détection des blocages anti-bot / JavaScript
-    lower_text = extracted_text.lower()
-    is_blocked = any(phrase in lower_text for phrase in BLOCKED_PHRASES)
+    # 3. Fallback to RSS summary if available
+    if summary_fallback and len(summary_fallback.strip()) > 15:
+        return f"Article Summary:\n\n{summary_fallback}"
 
-    if not extracted_text or len(extracted_text.strip()) < 100 or is_blocked:
-        if summary_fallback and len(summary_fallback.strip()) > 15:
-            return f"Résumé de l'article :\n\n{summary_fallback}"
-        return "Le contenu complet de cet article est protégé par le site d'origine. Veuillez cliquer sur 'Voir l'original ↗' ci-dessous pour le lire directement sur la source."
+    return "The full content of this article is protected by the source website. Please click 'View Original ↗' below to read it directly on the source site."
 
-    return extracted_text
-
-def translate_text(text, target_lang):
-    if not text or target_lang == "original" or target_lang not in ["fr", "en"]:
+def translate_to_english(text):
+    if not text:
         return text
     
     paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
     if not paragraphs:
         return text
 
-    translator = GoogleTranslator(source='auto', target=target_lang)
+    translator = GoogleTranslator(source='auto', target='en')
     translated_paragraphs = []
     
     chunk = ""
@@ -376,29 +388,29 @@ def translate_text(text, target_lang):
 
 @app.route("/")
 def index():
-    today = datetime.now().strftime("%A %d %B %Y")
+    today = datetime.now().strftime("%A, %B %d, %Y")
     
     html = f"""
     <!DOCTYPE html>
-    <html lang="fr">
+    <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>News info</title>
+        <title>News Info Hub</title>
         <style>{COMMON_CSS}</style>
     </head>
     <body>
         <header>
-            <h1>News info</h1>
+            <h1>News Info Hub</h1>
             <p>{today}</p>
         </header>
 
         <a class="fav-banner" href="/favorites">
-            <span>⭐ À lire plus tard (Favoris)</span>
+            <span>⭐ Read Later (Bookmarks)</span>
             <span id="fav-count" style="background: var(--accent-color); color: #fff; padding: 2px 10px; border-radius: 12px; font-size: 0.85rem;">0</span>
         </a>
 
-        <h2 style="font-size: 1.1rem; margin-bottom: 12px; color: var(--text-secondary);">Choisissez un domaine :</h2>
+        <h2 style="font-size: 1.1rem; margin-bottom: 12px; color: var(--text-secondary);">Select a Category:</h2>
         <div class="category-grid">
             {"".join([f'''
             <a class="cat-card" href="/category?cat={cat_key}">
@@ -417,7 +429,7 @@ def index():
 def category():
     cat_key = request.args.get("cat")
     if not cat_key or cat_key not in CATEGORIES:
-        return "Domaine introuvable.", 404
+        return "Category not found.", 404
         
     cat_info = CATEGORIES[cat_key]
     now_time = time.time()
@@ -472,7 +484,7 @@ def category():
                 </div>
             </div>
             <div class="card-actions">
-                <a class="btn" href="/article?url={a['safe_url']}&title={a['safe_title']}&cat={cat_key}&summary={a['safe_summary']}&lang=fr">Lire l'article</a>
+                <a class="btn" href="/article?url={a['safe_url']}&title={a['safe_title']}&cat={cat_key}&summary={a['safe_summary']}">Read Article</a>
                 <button class="btn-fav" data-url="{a['raw_url']}" onclick="toggleFav('{a['raw_url']}', '{quote(a['title'], safe='')}', '{a['source']}', '{a['date']}', '{cat_key}', '{a['img']}', '{a['safe_summary']}')">📌</button>
             </div>
         </div>
@@ -480,23 +492,23 @@ def category():
 
     html = f"""
     <!DOCTYPE html>
-    <html lang="fr">
+    <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{cat_info['name']} - News info</title>
+        <title>{cat_info['name']} - News Info</title>
         <style>{COMMON_CSS}</style>
     </head>
     <body>
-        <a class="back" href="/">&larr; Tous les domaines</a>
+        <a class="back" href="/">&larr; All Categories</a>
         <header style="text-align: left; margin-bottom: 20px;">
             <div style="font-size: 2.5rem; margin-bottom: 4px;">{cat_info['icon']}</div>
             <h1>{cat_info['name']}</h1>
-            <p style="text-align:left;">Articles publiés ces dernières 48h</p>
+            <p style="text-align:left;">Published in the last 48 hours</p>
         </header>
 
         <div class="articles-list">
-            {articles_html if articles else '<p style="color: var(--text-secondary);">Aucun article publié ces dernières 48 heures.</p>'}
+            {articles_html if articles else '<p style="color: var(--text-secondary);">No articles published in the last 48 hours.</p>'}
         </div>
         {BOOKMARK_JS}
     </body>
@@ -510,21 +522,18 @@ def article():
     raw_title = request.args.get("title", "Article")
     raw_summary = request.args.get("summary", "")
     cat_key = request.args.get("cat", "")
-    target_lang = request.args.get("lang", "fr")
     
     if not raw_url:
-        return "URL manquante.", 400
+        return "Missing URL.", 400
         
     target_url = unquote(raw_url)
     title = unquote(raw_title)
     summary_fallback = unquote(raw_summary)
     now_time = time.time()
     
-    cache_key = (target_url, target_lang)
-    
-    if cache_key in CACHE_TRANSLATIONS and (now_time - CACHE_TRANSLATIONS[cache_key]['time'] < ARTICLE_CACHE_TTL):
-        translated_title = CACHE_TRANSLATIONS[cache_key]['title']
-        translated_content = CACHE_TRANSLATIONS[cache_key]['content']
+    if target_url in CACHE_TRANSLATIONS and (now_time - CACHE_TRANSLATIONS[target_url]['time'] < ARTICLE_CACHE_TTL):
+        translated_title = CACHE_TRANSLATIONS[target_url]['title']
+        translated_content = CACHE_TRANSLATIONS[target_url]['content']
     else:
         if target_url in CACHE_ARTICLES and (now_time - CACHE_ARTICLES[target_url]['time'] < ARTICLE_CACHE_TTL):
             raw_content = CACHE_ARTICLES[target_url]['text']
@@ -532,10 +541,10 @@ def article():
             raw_content = fetch_clean_article(target_url, summary_fallback)
             CACHE_ARTICLES[target_url] = {'time': now_time, 'text': raw_content}
             
-        translated_title = translate_text(title, target_lang)
-        translated_content = translate_text(raw_content, target_lang)
+        translated_title = translate_to_english(title)
+        translated_content = translate_to_english(raw_content)
         
-        CACHE_TRANSLATIONS[cache_key] = {
+        CACHE_TRANSLATIONS[target_url] = {
             'time': now_time, 
             'title': translated_title, 
             'content': translated_content
@@ -543,12 +552,9 @@ def article():
     
     back_url = f"/category?cat={cat_key}" if cat_key else "/"
     
-    btn_fr_class = "btn-lang active" if target_lang == "fr" else "btn-lang"
-    btn_en_class = "btn-lang active" if target_lang == "en" else "btn-lang"
-    
     html = f"""
     <!DOCTYPE html>
-    <html lang="{target_lang}">
+    <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -556,25 +562,17 @@ def article():
         <style>
             {COMMON_CSS}
             body {{ background: var(--card-bg); }}
-            .top-bar {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); flex-wrap: wrap; gap: 10px; }}
-            .lang-switch {{ display: flex; gap: 6px; }}
-            .btn-lang {{ text-decoration: none; padding: 6px 12px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-primary); }}
-            .btn-lang.active {{ background: var(--accent-color); color: #fff; border-color: var(--accent-color); }}
-            .audio-btn {{ background: var(--bg-color); border: 1px solid var(--border-color); padding: 6px 12px; border-radius: 8px; color: var(--text-primary); cursor: pointer; font-weight: 700; font-size: 0.85rem; }}
+            .top-bar {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }}
+            .audio-btn {{ background: var(--bg-color); border: 1px solid var(--border-color); padding: 8px 14px; border-radius: 8px; color: var(--text-primary); cursor: pointer; font-weight: 700; font-size: 0.85rem; }}
             article {{ font-size: 1.05rem; line-height: 1.8; color: var(--text-primary); margin-top: 20px; white-space: pre-line; }}
             h1 {{ font-size: 1.5rem; line-height: 1.35; margin-bottom: 12px; }}
             .actions {{ margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-color); text-align: center; display: flex; justify-content: center; gap: 10px; }}
         </style>
     </head>
     <body>
-        <a class="back" href="{back_url}">&larr; Retour au flux</a>
-        
         <div class="top-bar">
-            <div class="lang-switch">
-                <a class="{btn_fr_class}" href="/article?url={quote(raw_url, safe='')}&title={quote(raw_title, safe='')}&cat={cat_key}&summary={quote(raw_summary, safe='')}&lang=fr">🇫🇷 Français</a>
-                <a class="{btn_en_class}" href="/article?url={quote(raw_url, safe='')}&title={quote(raw_title, safe='')}&cat={cat_key}&summary={quote(raw_summary, safe='')}&lang=en">🇬🇧 English</a>
-            </div>
-            <button id="speech-btn" class="audio-btn" onclick="toggleAudio()">🔊 Écouter</button>
+            <a class="back" style="margin-bottom:0;" href="{back_url}">&larr; Back to Feed</a>
+            <button id="speech-btn" class="audio-btn" onclick="toggleAudio()">🔊 Listen</button>
         </div>
 
         <header style="text-align: left; padding-bottom: 12px;">
@@ -584,7 +582,7 @@ def article():
         <article id="article-body">{translated_content}</article>
 
         <div class="actions">
-            <a class="btn-outline" href="{target_url}" target="_blank" rel="noopener">Voir l'original ↗</a>
+            <a class="btn-outline" href="{target_url}" target="_blank" rel="noopener">View Original ↗</a>
             <button class="btn-fav" data-url="{target_url}" onclick="toggleFav('{target_url}', '{quote(raw_title, safe='')}', 'Source', '', '{cat_key}', '', '{quote(raw_summary, safe='')}')">📌</button>
         </div>
 
@@ -598,7 +596,7 @@ def article():
             function stopAudio() {{
                 synth.cancel();
                 isSpeaking = false;
-                document.getElementById('speech-btn').innerHTML = "🔊 Écouter";
+                document.getElementById('speech-btn').innerHTML = "🔊 Listen";
             }}
 
             function toggleAudio() {{
@@ -611,11 +609,10 @@ def article():
                 const fullText = document.getElementById('article-body').innerText;
                 if (!fullText || fullText.length < 5) return;
 
-                // Découpage en phrases pour éviter le bug de coupure audio
                 speechChunks = fullText.match(/[^.!?]+[.!?]+/g) || [fullText];
                 currentChunk = 0;
                 isSpeaking = true;
-                btn.innerHTML = "⏹️ Arrêter";
+                btn.innerHTML = "⏹️ Stop";
 
                 speakNext();
             }}
@@ -634,7 +631,7 @@ def article():
                 }}
 
                 const utterance = new SpeechSynthesisUtterance(chunkText);
-                utterance.lang = "{target_lang}" === "en" ? "en-US" : "fr-FR";
+                utterance.lang = "en-US";
                 utterance.rate = 1.0;
 
                 utterance.onend = function() {{
@@ -659,18 +656,18 @@ def article():
 def favorites():
     html = f"""
     <!DOCTYPE html>
-    <html lang="fr">
+    <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Mes Favoris - News info</title>
+        <title>Saved Articles - News Info</title>
         <style>{COMMON_CSS}</style>
     </head>
     <body>
-        <a class="back" href="/">&larr; Accueil</a>
+        <a class="back" href="/">&larr; Home</a>
         <header style="text-align: left; margin-bottom: 20px;">
-            <h1>⭐ Articles sauvegardés</h1>
-            <p style="text-align:left;">À lire plus tard</p>
+            <h1>⭐ Saved Articles</h1>
+            <p style="text-align:left;">Read later</p>
         </header>
 
         <div id="favs-list"></div>
@@ -680,7 +677,7 @@ def favorites():
                 const favs = JSON.parse(localStorage.getItem('news_favs') || '[]');
                 const container = document.getElementById('favs-list');
                 if (favs.length === 0) {{
-                    container.innerHTML = '<p style="color: var(--text-secondary);">Aucun article sauvegardé pour le moment.</p>';
+                    container.innerHTML = '<p style="color: var(--text-secondary);">No saved articles yet.</p>';
                     return;
                 }}
                 
@@ -705,7 +702,7 @@ def favorites():
                             </div>
                         </div>
                         <div class="card-actions">
-                            <a class="btn" href="/article?url=${{safeUrl}}&title=${{safeTitle}}&cat=${{a.cat}}&summary=${{safeSummary}}&lang=fr">Lire l'article</a>
+                            <a class="btn" href="/article?url=${{safeUrl}}&title=${{safeTitle}}&cat=${{a.cat}}&summary=${{safeSummary}}">Read Article</a>
                             <button class="btn-fav" onclick="removeFav('${{a.url}}')">🗑️</button>
                         </div>
                     </div>
