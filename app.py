@@ -25,29 +25,34 @@ CATEGORIES = {
         "icon": "🌐",
         "feeds": {
             "BBC News": "http://feeds.bbci.co.uk/news/world/rss.xml",
-            "Reuters": "https://news.google.com/rss/search?q=site:reuters.com+world+when:2d&hl=en-US&gl=US&ceid=US:en",
             "Al Jazeera": "https://www.aljazeera.com/xml/rss/all.xml",
-            "AP News": "https://news.google.com/rss/search?q=site:apnews.com+when:2d&hl=en-US&gl=US&ceid=US:en"
+            "CNN World": "http://rss.cnn.com/rss/edition_world.rss",
+            "NPR World": "https://feeds.npr.org/1004/rss.xml",
+            "Deutsche Welle": "https://rss.dw.com/xml/rss-out_top-stories"
         }
     },
     "economy": {
         "name": "Business & Economy",
         "icon": "📈",
         "feeds": {
-            "Bloomberg": "https://news.google.com/rss/search?q=site:bloomberg.com+when:2d&hl=en-US&gl=US&ceid=US:en",
+            "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
             "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
-            "Financial Times": "https://news.google.com/rss/search?q=site:ft.com+when:2d&hl=en-US&gl=US&ceid=US:en",
-            "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+            "Fortune": "https://fortune.com/feed/",
+            "Business Insider": "https://www.businessinsider.com/rss",
+            "Yahoo Finance": "https://finance.yahoo.com/news/rssindex"
         }
     },
     "tech": {
         "name": "Tech & AI",
         "icon": "💻",
         "feeds": {
+            "Underscore_ (Tech)": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0e3QhIYukixgh5vJiEWRhQ",
+            "Micode": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9TrI1_KzpOidR31AepP8pA",
             "The Verge": "https://www.theverge.com/rss/index.xml",
             "Ars Technica": "https://feeds.arstechnica.com/arstechnica/index",
             "TechCrunch": "https://techcrunch.com/feed/",
             "Wired": "https://www.wired.com/feed/category/gear/latest/rss",
+            "Engadget": "https://www.engadget.com/rss.xml",
             "BleepingComputer": "https://www.bleepingcomputer.com/feed/"
         }
     },
@@ -57,7 +62,8 @@ CATEGORIES = {
         "feeds": {
             "Aeon Essays": "https://aeon.co/feed.rss",
             "Psyche": "https://psyche.co/feed.rss",
-            "The Conversation": "https://news.google.com/rss/search?q=philosophy+society+when:3d&hl=en-US&gl=US&ceid=US:en"
+            "Daily Nous": "https://dailynous.com/feed/",
+            "Institute of Art and Ideas": "https://iai.tv/rss/articles"
         }
     },
     "cinema": {
@@ -66,7 +72,9 @@ CATEGORIES = {
         "feeds": {
             "Variety": "https://variety.com/feed/",
             "IndieWire": "https://www.indiewire.com/feed/",
-            "Hollywood Reporter": "https://news.google.com/rss/search?q=site:hollywoodreporter.com+when:2d&hl=en-US&gl=US&ceid=US:en"
+            "Collider": "https://collider.com/feed/",
+            "Deadline": "https://deadline.com/feed/",
+            "Screen Rant": "https://screenrant.com/feed/"
         }
     },
     "anime": {
@@ -74,8 +82,9 @@ CATEGORIES = {
         "icon": "⛩️",
         "feeds": {
             "Anime News Network": "https://www.animenewsnetwork.com/news/rss.xml",
-            "Crunchyroll News": "https://news.google.com/rss/search?q=site:crunchyroll.com/news+when:2d&hl=en-US&gl=US&ceid=US:en",
-            "Sakuga Blog": "https://blog.sakugabooru.com/feed/"
+            "Otaku USA Magazine": "https://otakuusamagazine.com/feed/",
+            "Sakuga Blog": "https://blog.sakugabooru.com/feed/",
+            "Anime Herald": "https://www.animeherald.com/feed/"
         }
     },
     "science": {
@@ -84,7 +93,9 @@ CATEGORIES = {
         "feeds": {
             "Nature News": "https://www.nature.com/nature.rss",
             "SciTechDaily": "https://scitechdaily.com/feed/",
-            "Live Science": "https://www.livescience.com/feeds/all"
+            "Live Science": "https://www.livescience.com/feeds/all",
+            "Space.com": "https://www.space.com/feeds/all",
+            "Phys.org": "https://phys.org/rss-feed/"
         }
     },
     "health": {
@@ -92,7 +103,8 @@ CATEGORIES = {
         "icon": "🩺",
         "feeds": {
             "Medical News Today": "https://www.medicalnewstoday.com/feed",
-            "Healthline": "https://news.google.com/rss/search?q=site:healthline.com+when:3d&hl=en-US&gl=US&ceid=US:en"
+            "Harvard Health": "https://www.health.harvard.edu/blog/feed",
+            "Everyday Health": "https://www.everydayhealth.com/rss/"
         }
     },
     "sports": {
@@ -101,15 +113,18 @@ CATEGORIES = {
         "feeds": {
             "BBC Sport": "http://feeds.bbci.co.uk/sport/rss.xml",
             "ESPN": "https://www.espn.com/espn/rss/news",
-            "The Athletic": "https://news.google.com/rss/search?q=site:theathletic.com+when:2d&hl=en-US&gl=US&ceid=US:en"
+            "CBS Sports": "https://www.cbssports.com/rss/headlines/",
+            "Sky Sports": "https://www.skysports.com/rss/12040"
         }
     },
     "culture": {
         "name": "Culture & Society",
         "icon": "🎭",
         "feeds": {
-            "The Atlantic": "https://news.google.com/rss/search?q=site:theatlantic.com+when:3d&hl=en-US&gl=US&ceid=US:en",
-            "The New Yorker": "https://www.newyorker.com/feed/everything"
+            "The New Yorker": "https://www.newyorker.com/feed/everything",
+            "Rolling Stone": "https://www.rollingstone.com/feed/",
+            "Smithsonian Magazine": "https://www.smithsonianmag.com/rss/latest_articles/",
+            "Slate": "https://slate.com/feeds/all.rss"
         }
     }
 }
@@ -309,82 +324,110 @@ def extract_image_from_entry(entry):
             return m.group(1)
     return None
 
+def resolve_real_url(url):
+    """ Resolves redirect URLs like Google News to get the direct publisher URL """
+    if "news.google.com" not in url:
+        return url
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        }
+        resp = requests.get(url, headers=headers, allow_redirects=True, timeout=5)
+        if resp.status_code == 200:
+            if "news.google.com" not in resp.url:
+                return resp.url
+            m = re.search(r'data-n-au=["\']([^"\']+)["\']', resp.text)
+            if m:
+                return m.group(1)
+            m2 = re.search(r'<a[^>]+href=["\'](https?://(?!news\.google\.com)[^"\']+)["\']', resp.text)
+            if m2:
+                return m2.group(1)
+    except Exception:
+        pass
+    return url
+
 def fetch_clean_article(url, summary_fallback=""):
-    """
-    Primary method uses Jina AI Reader (https://r.jina.ai/)
-    Bypasses Cloudflare & Bot Blockers seamlessly!
-    """
-    jina_url = f"https://r.jina.ai/{url}"
+    real_url = resolve_real_url(url)
+    jina_url = f"https://r.jina.ai/{real_url}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "X-No-Cache": "true"
     }
     
+    raw_text = ""
     # 1. Try Jina Reader
     try:
         resp = requests.get(jina_url, headers=headers, timeout=12)
         if resp.status_code == 200 and len(resp.text.strip()) > 150:
             content = resp.text
-            # Remove Jina markdown headers if present
             if "Markdown Content:" in content:
                 content = content.split("Markdown Content:", 1)[1]
             
-            # Clean markdown links/images for clean reading
-            clean_text = re.sub(r'!?\[.*?\]\(.*?\)', '', content)
+            clean_text = re.sub(r'!?\[([^\]]*)\]\([^)]*\)', r'\1', content)
+            clean_text = re.sub(r'#{1,6}\s*', '', clean_text)
             clean_text = re.sub(r'\n{3,}', '\n\n', clean_text).strip()
             
-            if len(clean_text) > 100:
+            if len(clean_text) > 300:
                 return clean_text
+            raw_text = clean_text
     except Exception:
         pass
 
-    # 2. Fallback to Direct Trafilatura Extraction
+    # 2. Try Trafilatura directly on publisher URL
     try:
-        resp = requests.get(url, headers=headers, timeout=8)
+        resp = requests.get(real_url, headers={"User-Agent": headers["User-Agent"]}, timeout=8)
         if resp.status_code == 200:
             text = trafilatura.extract(resp.text, include_links=False, output_format="txt") or ""
-            if text and len(text.strip()) > 100:
-                return text
+            if len(text.strip()) > 300:
+                return text.strip()
+            if len(text.strip()) > len(raw_text):
+                raw_text = text.strip()
     except Exception:
         pass
 
-    # 3. Fallback to RSS summary if available
-    if summary_fallback and len(summary_fallback.strip()) > 15:
-        return f"Article Summary:\n\n{summary_fallback}"
+    if len(raw_text) > 150:
+        return raw_text
 
-    return "The full content of this article is protected by the source website. Please click 'View Original ↗' below to read it directly on the source site."
+    # 3. Fallback if article is paywalled / inaccessible
+    if summary_fallback and len(summary_fallback.strip()) > 15:
+        return f"{summary_fallback}\n\n[Note: The full article is restricted or paywalled on the source website. Click 'View Original ↗' below to read directly on the publisher site.]"
+
+    return "The full content of this article is protected or restricted by the source website. Please click 'View Original ↗' below to read it directly on the publisher site."
 
 def translate_to_english(text):
-    if not text:
+    if not text or len(text.strip()) == 0:
         return text
     
-    paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
-    if not paragraphs:
-        return text
+    try:
+        paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
+        if not paragraphs:
+            return text
 
-    translator = GoogleTranslator(source='auto', target='en')
-    translated_paragraphs = []
-    
-    chunk = ""
-    for p in paragraphs:
-        if len(chunk) + len(p) < 900:
-            chunk += ("\n\n" if chunk else "") + p
-        else:
+        translator = GoogleTranslator(source='auto', target='en')
+        translated_paragraphs = []
+        
+        chunk = ""
+        for p in paragraphs:
+            if len(chunk) + len(p) < 900:
+                chunk += ("\n\n" if chunk else "") + p
+            else:
+                try:
+                    res = translator.translate(chunk)
+                    translated_paragraphs.append(res if res else chunk)
+                except Exception:
+                    translated_paragraphs.append(chunk)
+                chunk = p
+                
+        if chunk:
             try:
                 res = translator.translate(chunk)
                 translated_paragraphs.append(res if res else chunk)
             except Exception:
                 translated_paragraphs.append(chunk)
-            chunk = p
-            
-    if chunk:
-        try:
-            res = translator.translate(chunk)
-            translated_paragraphs.append(res if res else chunk)
-        except Exception:
-            translated_paragraphs.append(chunk)
 
-    return "\n\n".join(translated_paragraphs)
+        return "\n\n".join(translated_paragraphs)
+    except Exception:
+        return text
 
 @app.route("/")
 def index():
