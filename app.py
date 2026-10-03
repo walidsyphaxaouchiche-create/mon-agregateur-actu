@@ -3,6 +3,7 @@ import re
 import time
 import html
 import json
+import random
 import requests
 import feedparser
 import trafilatura
@@ -46,7 +47,181 @@ class BoundedTTLCache:
 CACHE_FEEDS = BoundedTTLCache(ttl_seconds=600, max_size=50)        # 10 minutes
 CACHE_ARTICLES = BoundedTTLCache(ttl_seconds=86400, max_size=300)   # 24 heures
 CACHE_TRANSLATIONS = BoundedTTLCache(ttl_seconds=86400, max_size=300) # 24 heures
+CACHE_SUMMARIES = BoundedTTLCache(ttl_seconds=86400, max_size=300)   # 24 heures
 
+# --- ROTATION DE USER-AGENTS RÉALISTES ---
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+]
+
+def get_random_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
+    }
+
+# --- MODÈLE DE RÉSUMÉ IA (DistilBART, CPU-only) ---
+_summarizer = None
+
+def get_summarizer():
+    global _summarizer
+    if _summarizer is None:
+        try:
+            from transformers import pipeline
+            _summarizer = pipeline(
+                "summarization",
+                model="sshleifer/distilbart-cnn-12-6",
+                device=-1,  # CPU
+            )
+        except Exception:
+            _summarizer = False
+    return _summarizer if _summarizer else None
+
+def generate_summary(text, max_length=250, min_length=80):
+    if not text or len(text.strip()) < 200:
+        return None
+    summarizer = get_summarizer()
+    if summarizer is None:
+        return None
+    try:
+        # DistilBART a une limite de ~1024 tokens en entrée
+        # On prend les 3000 premiers caractères pour rester dans la limite
+        input_text = text[:3000]
+        result = summarizer(
+            input_text,
+            max_length=max_length,
+            min_length=min_length,
+            do_sample=False,
+        )
+        if result and len(result) > 0:
+            return result[0]["summary_text"]
+    except Exception:
+        pass
+    return None
+
+# --- SCRAPING ANTI-BOT AMÉLIORÉ ---
+def fetch_with_curl_cffi(url, headers=None):
+    """Utilise curl_cffi pour imiter les empreintes TLS d'un vrai navigateur."""
+    try:
+        from curl_cffi import requests as curl_requests
+        h = headers or get_random_headers()
+        resp = curl_requests.get(url, headers=h, timeout=15, impersonate="chrome")
+        if resp.status_code == 200 and len(resp.text) > 200:
+            return resp.text
+    except Exception:
+        pass
+    return None
+
+def fetch_with_playwright(url):
+    """Fallback : utilise un vrai navigateur headless via Playwright."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent=random.choice(USER_AGENTS),
+                viewport={"width": 1920, "height": 1080},
+                locale="en-US",
+            )
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle", timeout=20000)
+            # Simuler un scroll humain
+            page.mouse.wheel(0, 500)
+            time.sleep(1)
+            content = page.content()
+            browser.close()
+            if content and len(content) > 500:
+                return content
+    except Exception:
+        pass
+    return None
+
+def fetch_clean_article(url, summary_fallback=""):
+    real_url = resolve_real_url(url)
+    jina_url = f"https://r.jina.ai/{real_url}"
+    headers = get_random_headers()
+    
+    raw_text = ""
+    
+    # 1. Jina Reader (rapide, souvent suffisant)
+    try:
+        resp = requests.get(jina_url, headers=headers, timeout=10)
+        if resp.status_code == 200 and len(resp.text.strip()) > 150:
+            content = resp.text
+            if "Markdown Content:" in content:
+                content = content.split("Markdown Content:", 1)[1]
+            
+            clean_text = re.sub(r'!?\[([^\]]*)\]\([^)]*\)', r'\1', content)
+            clean_text = re.sub(r'#{1,6}\s*', '', clean_text)
+            clean_text = re.sub(r'\n{3,}', '\n\n', clean_text).strip()
+            
+            if len(clean_text) > 300:
+                return clean_text
+            raw_text = clean_text
+    except Exception:
+        pass
+
+    # 2. curl_cffi (imite TLS navigateur)
+    html_content = fetch_with_curl_cffi(real_url)
+    if html_content:
+        try:
+            text = trafilatura.extract(html_content, include_links=False, output_format="txt") or ""
+            if len(text.strip()) > 300:
+                return text.strip()
+            if len(text.strip()) > len(raw_text):
+                raw_text = text.strip()
+        except Exception:
+            pass
+
+    # 3. Trafilatura direct
+    try:
+        resp = requests.get(real_url, headers=headers, timeout=6)
+        if resp.status_code == 200:
+            text = trafilatura.extract(resp.text, include_links=False, output_format="txt") or ""
+            if len(text.strip()) > 300:
+                return text.strip()
+            if len(text.strip()) > len(raw_text):
+                raw_text = text.strip()
+    except Exception:
+        pass
+
+    # 4. Playwright (fallback ultime anti-bot)
+    html_content = fetch_with_playwright(real_url)
+    if html_content:
+        try:
+            text = trafilatura.extract(html_content, include_links=False, output_format="txt") or ""
+            if len(text.strip()) > 300:
+                return text.strip()
+            if len(text.strip()) > len(raw_text):
+                raw_text = text.strip()
+        except Exception:
+            pass
+
+    if len(raw_text) > 150:
+        return raw_text
+
+    # 5. Fallback Paywall
+    if summary_fallback and len(summary_fallback.strip()) > 15:
+        return f"{summary_fallback}\n\n[Note: The full article is restricted or paywalled on the source website. Click 'View Original ↗' below to read directly on the publisher site.]"
+
+    return "The full content of this article is protected or restricted by the source website. Please click 'View Original ↗' below to read it directly on the publisher site."
+
+# --- CATÉGORIES DE FEEDS ---
 CATEGORIES = {
     "politics": {
         "name": "Politics & World",
@@ -373,6 +548,59 @@ COMMON_CSS = f"""
         font-weight: 700;
         box-shadow: 0 2px 8px rgba(0,0,0,0.02);
     }}
+    
+    /* Summary Box */
+    .summary-box {{
+        background: linear-gradient(135deg, rgba(37,99,235,0.05) 0%, rgba(124,58,237,0.05) 100%);
+        border: 1px solid rgba(37,99,235,0.15);
+        border-radius: 14px;
+        padding: 16px 18px;
+        margin-bottom: 20px;
+    }}
+    .summary-label {{
+        font-size: 0.75rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--accent-color);
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }}
+    .summary-text {{
+        font-size: 0.95rem;
+        line-height: 1.7;
+        color: var(--text-primary);
+    }}
+    .summary-loading {{
+        color: var(--text-secondary);
+        font-style: italic;
+    }}
+    
+    /* Toggle Buttons */
+    .view-toggle {{
+        display: flex;
+        gap: 8px;
+        margin-bottom: 16px;
+    }}
+    .toggle-btn {{
+        flex: 1;
+        padding: 10px 14px;
+        border-radius: 10px;
+        border: 1px solid var(--border-color);
+        background: var(--card-bg);
+        color: var(--text-secondary);
+        font-weight: 700;
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }}
+    .toggle-btn.active {{
+        background: var(--accent-gradient);
+        color: #fff;
+        border-color: transparent;
+    }}
 """
 
 BOOKMARK_JS = """
@@ -441,9 +669,7 @@ def resolve_real_url(url):
     if "news.google.com" not in url:
         return url
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        }
+        headers = get_random_headers()
         resp = requests.get(url, headers=headers, allow_redirects=True, timeout=4)
         if resp.status_code == 200:
             if "news.google.com" not in resp.url:
@@ -457,54 +683,6 @@ def resolve_real_url(url):
     except Exception:
         pass
     return url
-
-def fetch_clean_article(url, summary_fallback=""):
-    real_url = resolve_real_url(url)
-    jina_url = f"https://r.jina.ai/{real_url}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "X-No-Cache": "true"
-    }
-    
-    raw_text = ""
-    # 1. Jina Reader
-    try:
-        resp = requests.get(jina_url, headers=headers, timeout=10)
-        if resp.status_code == 200 and len(resp.text.strip()) > 150:
-            content = resp.text
-            if "Markdown Content:" in content:
-                content = content.split("Markdown Content:", 1)[1]
-            
-            clean_text = re.sub(r'!?\[([^\]]*)\]\([^)]*\)', r'\1', content)
-            clean_text = re.sub(r'#{1,6}\s*', '', clean_text)
-            clean_text = re.sub(r'\n{3,}', '\n\n', clean_text).strip()
-            
-            if len(clean_text) > 300:
-                return clean_text
-            raw_text = clean_text
-    except Exception:
-        pass
-
-    # 2. Trafilatura
-    try:
-        resp = requests.get(real_url, headers={"User-Agent": headers["User-Agent"]}, timeout=6)
-        if resp.status_code == 200:
-            text = trafilatura.extract(resp.text, include_links=False, output_format="txt") or ""
-            if len(text.strip()) > 300:
-                return text.strip()
-            if len(text.strip()) > len(raw_text):
-                raw_text = text.strip()
-    except Exception:
-        pass
-
-    if len(raw_text) > 150:
-        return raw_text
-
-    # 3. Fallback Paywall
-    if summary_fallback and len(summary_fallback.strip()) > 15:
-        return f"{summary_fallback}\n\n[Note: The full article is restricted or paywalled on the source website. Click 'View Original ↗' below to read directly on the publisher site.]"
-
-    return "The full content of this article is protected or restricted by the source website. Please click 'View Original ↗' below to read it directly on the publisher site."
 
 def translate_to_english(text):
     if not text or len(text.strip()) == 0:
@@ -725,7 +903,26 @@ def article():
         
         CACHE_TRANSLATIONS.set(target_url, (translated_title, translated_content))
     
+    # 2. Génération du résumé IA (avec cache)
+    cached_summary = CACHE_SUMMARIES.get(target_url)
+    if cached_summary is not None:
+        ai_summary = cached_summary
+    else:
+        ai_summary = generate_summary(translated_content)
+        CACHE_SUMMARIES.set(target_url, ai_summary)
+    
     back_url = f"/category?cat={cat_key}" if cat_key else "/"
+    
+    # Affichage du résumé
+    if ai_summary:
+        summary_html = f"""
+        <div class="summary-box">
+            <div class="summary-label">⚡ AI Summary</div>
+            <div class="summary-text">{html.escape(ai_summary)}</div>
+        </div>
+        """
+    else:
+        summary_html = ""
     
     html_content = f"""
     <!DOCTYPE html>
@@ -754,6 +951,13 @@ def article():
             <h1>{html.escape(translated_title)}</h1>
         </header>
 
+        {summary_html}
+
+        <div class="view-toggle">
+            <button class="toggle-btn active" onclick="showSummary()">⚡ Summary</button>
+            <button class="toggle-btn" onclick="showFull()">📄 Full Article</button>
+        </div>
+
         <article id="article-body">{html.escape(translated_content)}</article>
 
         <div class="actions">
@@ -772,7 +976,7 @@ def article():
                 synth.cancel();
                 isSpeaking = false;
                 document.getElementById('speech-btn').innerHTML = "🔊 Listen";
-            }}
+            }};
 
             function toggleAudio() {{
                 const btn = document.getElementById('speech-btn');
@@ -821,6 +1025,24 @@ def article():
 
                 synth.speak(utterance);
             }}
+
+            function showSummary() {{
+                document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+                event.target.classList.add('active');
+                const summaryBox = document.querySelector('.summary-box');
+                const article = document.getElementById('article-body');
+                if (summaryBox) summaryBox.style.display = 'block';
+                article.style.display = 'none';
+            }}
+
+            function showFull() {{
+                document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+                event.target.classList.add('active');
+                const summaryBox = document.querySelector('.summary-box');
+                const article = document.getElementById('article-body');
+                if (summaryBox) summaryBox.style.display = 'none';
+                article.style.display = 'block';
+            }}
         </script>
     </body>
     </html>
@@ -848,50 +1070,50 @@ def favorites():
         <div id="favs-list"></div>
 
         <script>
-            function renderFavs() {{
+            function renderFavs() {
                 const favs = getFavs();
                 const container = document.getElementById('favs-list');
-                if (favs.length === 0) {{
+                if (favs.length === 0) {
                     container.innerHTML = '<p style="color: var(--text-secondary);">No saved articles yet.</p>';
                     return;
-                }}
+                }
                 
                 let html = '';
-                favs.forEach(a => {{
+                favs.forEach(a => {
                     const title = decodeURIComponent(a.title);
                     const safeTitle = encodeURIComponent(title);
                     const safeUrl = encodeURIComponent(a.url);
                     const safeSummary = a.summary || '';
-                    const imgTag = a.img ? `<img class="card-thumb" src="${{a.img}}" loading="lazy" alt="" />` : '';
+                    const imgTag = a.img ? `<img class="card-thumb" src="${a.img}" loading="lazy" alt="" />` : '';
                     
                     html += `
                     <div class="card">
                         <div class="card-body-layout">
-                            ${{imgTag}}
+                            ${imgTag}
                             <div class="card-main">
                                 <div class="card-meta">
-                                    <span class="tag">${{a.source}}</span>
-                                    <span class="date">${{a.date}}</span>
+                                    <span class="tag">${a.source}</span>
+                                    <span class="date">${a.date}</span>
                                 </div>
-                                <div class="card-title">${{title}}</div>
+                                <div class="card-title">${title}</div>
                             </div>
                         </div>
                         <div class="card-actions">
-                            <a class="btn" href="/article?url=${{safeUrl}}&title=${{safeTitle}}&cat=${{a.cat}}&summary=${{safeSummary}}">Read Article</a>
-                            <button class="btn-fav" onclick="removeFav('${{a.url}}')">🗑️</button>
+                            <a class="btn" href="/article?url=${safeUrl}&title=${safeTitle}&cat=${a.cat}&summary=${safeSummary}">Read Article</a>
+                            <button class="btn-fav" onclick="removeFav('${a.url}')">🗑️</button>
                         </div>
                     </div>
                     `;
-                }});
+                });
                 container.innerHTML = html;
-            }}
+            }
 
-            function removeFav(url) {{
+            function removeFav(url) {
                 let favs = getFavs();
                 favs = favs.filter(item => item.url !== url);
                 localStorage.setItem('news_favs', JSON.stringify(favs));
                 renderFavs();
-            }}
+            }
 
             document.addEventListener('DOMContentLoaded', renderFavs);
         </script>
