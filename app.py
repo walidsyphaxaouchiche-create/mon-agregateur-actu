@@ -1,23 +1,51 @@
 import os
 import re
 import time
+import html
+import json
 import requests
 import feedparser
 import trafilatura
 from datetime import datetime, timezone, timedelta
 from urllib.parse import quote, unquote
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from deep_translator import GoogleTranslator
 from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
 
-# --- IN-MEMORY CACHE ---
-CACHE_FEEDS = {}         # {cat_key: (timestamp, articles_list)}
-CACHE_ARTICLES = {}      # {url: (timestamp, raw_text)}
-CACHE_TRANSLATIONS = {}  # {url: (timestamp, title, content)}
+# --- SYSTÈME DE CACHE BORNE AVEC PURGE AUTOMATIQUE (RAM-SAFE) ---
+class BoundedTTLCache:
+    def __init__(self, ttl_seconds, max_size=300):
+        self.ttl = ttl_seconds
+        self.max_size = max_size
+        self.cache = {}
 
-FEED_CACHE_TTL = 600      # 10 minutes
-ARTICLE_CACHE_TTL = 86400  # 24 hours
+    def get(self, key):
+        if key in self.cache:
+            timestamp, value = self.cache[key]
+            if time.time() - timestamp < self.ttl:
+                return value
+            else:
+                del self.cache[key]
+        return None
+
+    def set(self, key, value):
+        self.purge_expired()
+        if len(self.cache) >= self.max_size:
+            oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k][0])
+            del self.cache[oldest_key]
+        self.cache[key] = (time.time(), value)
+
+    def purge_expired(self):
+        now = time.time()
+        expired = [k for k, (t, _) in self.cache.items() if now - t >= self.ttl]
+        for k in expired:
+            del self.cache[k]
+
+CACHE_FEEDS = BoundedTTLCache(ttl_seconds=600, max_size=50)        # 10 minutes
+CACHE_ARTICLES = BoundedTTLCache(ttl_seconds=86400, max_size=300)   # 24 heures
+CACHE_TRANSLATIONS = BoundedTTLCache(ttl_seconds=86400, max_size=300) # 24 heures
 
 CATEGORIES = {
     "politics": {
@@ -46,8 +74,6 @@ CATEGORIES = {
         "name": "Tech & AI",
         "icon": "💻",
         "feeds": {
-            "Underscore_ (Tech)": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0e3QhIYukixgh5vJiEWRhQ",
-            "Micode": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9TrI1_KzpOidR31AepP8pA",
             "The Verge": "https://www.theverge.com/rss/index.xml",
             "Ars Technica": "https://feeds.arstechnica.com/arstechnica/index",
             "TechCrunch": "https://techcrunch.com/feed/",
@@ -79,7 +105,7 @@ CATEGORIES = {
     },
     "anime": {
         "name": "Anime & Manga",
-        "icon": "⛩️",
+        "icon": "⛩️️",
         "feeds": {
             "Anime News Network": "https://www.animenewsnetwork.com/news/rss.xml",
             "Otaku USA Magazine": "https://otakuusamagazine.com/feed/",
@@ -129,133 +155,215 @@ CATEGORIES = {
     }
 }
 
-COMMON_CSS = """
-    :root {
+# --- LOGO MASCOTTE EN SVG VECTORIEL ---
+MASCOT_SVG = """
+<svg class="brand-logo" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#2563eb" />
+            <stop offset="100%" stop-color="#7c3aed" />
+        </linearGradient>
+        <linearGradient id="eyeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#38bdf8" />
+            <stop offset="100%" stop-color="#2563eb" />
+        </linearGradient>
+    </defs>
+    <!-- Aura de fond -->
+    <circle cx="50" cy="50" r="46" fill="url(#logoGrad)" opacity="0.12"/>
+    <circle cx="50" cy="50" r="40" stroke="url(#logoGrad)" stroke-width="2.5" stroke-dasharray="4 3"/>
+    
+    <!-- Corps Cyber-Owl -->
+    <path d="M28 36 L50 22 L72 36 L68 68 L50 82 L32 68 Z" fill="url(#logoGrad)"/>
+    
+    <!-- Yeux Lumineux -->
+    <circle cx="41" cy="44" r="7.5" fill="#ffffff"/>
+    <circle cx="59" cy="44" r="7.5" fill="#ffffff"/>
+    <circle cx="41" cy="44" r="4" fill="url(#eyeGrad)"/>
+    <circle cx="59" cy="44" r="4" fill="url(#eyeGrad)"/>
+    <circle cx="42.5" cy="42.5" r="1.5" fill="#ffffff"/>
+    <circle cx="60.5" cy="42.5" r="1.5" fill="#ffffff"/>
+    
+    <!-- Bec & Plumage -->
+    <path d="M46 51 L50 56 L54 51 Z" fill="#f59e0b"/>
+    <path d="M36 62 Q50 70 64 62" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.9"/>
+</svg>
+"""
+
+COMMON_CSS = f"""
+    :root {{
         --bg-color: #f8fafc;
         --card-bg: #ffffff;
         --text-primary: #0f172a;
         --text-secondary: #64748b;
         --border-color: #e2e8f0;
         --accent-color: #2563eb;
-    }
-    @media (prefers-color-scheme: dark) {
-        :root {
+        --accent-gradient: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+    }}
+    @media (prefers-color-scheme: dark) {{
+        :root {{
             --bg-color: #0f172a;
             --card-bg: #1e293b;
             --text-primary: #f8fafc;
             --text-secondary: #94a3b8;
             --border-color: #334155;
             --accent-color: #3b82f6;
-        }
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { 
+            --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+        }}
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ 
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
         background: var(--bg-color); 
         color: var(--text-primary); 
-        max-width: 680px; 
+        max-width: 720px; 
         margin: 0 auto; 
         padding: 20px 16px 40px 16px;
         line-height: 1.5;
-    }
-    header { text-align: center; margin-bottom: 24px; padding-top: 10px; }
-    header h1 { font-size: 2rem; font-weight: 800; letter-spacing: -0.5px; }
-    header p { font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; }
+    }}
     
-    .category-grid {
+    /* Header & Logo Branding */
+    .brand-header {{
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 24px;
+        padding-top: 10px;
+        text-align: center;
+    }}
+    .brand-logo {{
+        width: 72px;
+        height: 72px;
+        margin-bottom: 10px;
+        filter: drop-shadow(0 4px 12px rgba(37, 99, 235, 0.2));
+        transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }}
+    .brand-logo:hover {{
+        transform: scale(1.08) rotate(-3deg);
+    }}
+    .brand-title {{
+        font-size: 2.1rem;
+        font-weight: 900;
+        letter-spacing: -0.8px;
+        background: var(--accent-gradient);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }}
+    .brand-sub {{
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        margin-top: 4px;
+        font-weight: 500;
+    }}
+    
+    .category-grid {{
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
         gap: 12px;
         margin-bottom: 24px;
-    }
-    .cat-card {
+    }}
+    .cat-card {{
         background: var(--card-bg);
         border: 1px solid var(--border-color);
-        padding: 14px;
-        border-radius: 14px;
+        padding: 16px 12px;
+        border-radius: 16px;
         text-decoration: none;
         color: var(--text-primary);
         display: flex;
         flex-direction: column;
         align-items: center;
         text-align: center;
-        transition: transform 0.15s ease;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    .cat-card:active { transform: scale(0.97); }
-    .cat-icon { font-size: 1.8rem; margin-bottom: 6px; }
-    .cat-title { font-size: 0.88rem; font-weight: 600; line-height: 1.2; }
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.02);
+    }}
+    .cat-card:hover {{
+        transform: translateY(-2px);
+        border-color: var(--accent-color);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.06);
+    }}
+    .cat-card:active {{ transform: scale(0.97); }}
+    .cat-icon {{ font-size: 2rem; margin-bottom: 8px; }}
+    .cat-title {{ font-size: 0.9rem; font-weight: 700; line-height: 1.2; }}
 
-    .card { 
+    .card {{ 
         background: var(--card-bg); 
-        padding: 16px; 
-        margin-bottom: 14px; 
-        border-radius: 16px; 
+        padding: 18px; 
+        margin-bottom: 16px; 
+        border-radius: 18px; 
         border: 1px solid var(--border-color);
-        box-shadow: 0 2px 8px rgba(0,0,0,0.03); 
-    }
-    .card-body-layout {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.03); 
+        transition: border-color 0.2s ease;
+    }}
+    .card:hover {{
+        border-color: var(--accent-color);
+    }}
+    .card-body-layout {{
         display: flex;
-        gap: 12px;
+        gap: 14px;
         align-items: flex-start;
-        margin-bottom: 12px;
-    }
-    .card-thumb {
-        width: 84px;
-        height: 84px;
-        border-radius: 10px;
+        margin-bottom: 14px;
+    }}
+    .card-thumb {{
+        width: 88px;
+        height: 88px;
+        border-radius: 12px;
         object-fit: cover;
         flex-shrink: 0;
         background: var(--border-color);
-    }
-    .card-main { flex: 1; }
-    .card-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-    .tag { font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 20px; background: rgba(37,99,235,0.1); color: var(--accent-color); }
-    .date { font-size: 0.72rem; color: var(--text-secondary); }
-    .card-title { font-size: 1rem; font-weight: 700; line-height: 1.35; color: var(--text-primary); }
+    }}
+    .card-main {{ flex: 1; }}
+    .card-meta {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }}
+    .tag {{ font-size: 0.72rem; font-weight: 700; padding: 3px 9px; border-radius: 20px; background: rgba(37,99,235,0.12); color: var(--accent-color); }}
+    .date {{ font-size: 0.72rem; color: var(--text-secondary); }}
+    .card-title {{ font-size: 1.05rem; font-weight: 700; line-height: 1.4; color: var(--text-primary); }}
     
-    .card-actions {
+    .card-actions {{
         display: flex;
-        gap: 8px;
+        gap: 10px;
         align-items: center;
-    }
-    .btn { 
+    }}
+    .btn {{ 
         flex: 1;
         text-align: center; 
-        padding: 9px 12px; 
-        background: var(--accent-color); 
+        padding: 10px 14px; 
+        background: var(--accent-gradient); 
         color: #ffffff; 
         text-decoration: none; 
-        border-radius: 10px; 
-        font-weight: 600; 
-        font-size: 0.85rem; 
-    }
-    .btn-fav {
+        border-radius: 12px; 
+        font-weight: 700; 
+        font-size: 0.88rem; 
+        box-shadow: 0 2px 8px rgba(37,99,235,0.25);
+        transition: opacity 0.2s;
+    }}
+    .btn:hover {{ opacity: 0.92; }}
+    .btn-fav {{
         background: var(--bg-color);
         border: 1px solid var(--border-color);
         padding: 8px 12px;
-        border-radius: 10px;
+        border-radius: 12px;
         cursor: pointer;
         font-size: 1.1rem;
-    }
-    .btn-outline {
+        transition: transform 0.15s ease;
+    }}
+    .btn-fav:active {{ transform: scale(0.88); }}
+    .btn-outline {{
         display: inline-block;
-        padding: 8px 14px;
+        padding: 9px 16px;
         border: 1px solid var(--border-color);
-        border-radius: 8px;
+        border-radius: 10px;
         color: var(--text-primary);
         text-decoration: none;
-        font-size: 0.85rem;
-        font-weight: 600;
+        font-size: 0.88rem;
+        font-weight: 700;
         background: var(--card-bg);
-    }
-    .back { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 16px; color: var(--accent-color); text-decoration: none; font-weight: 600; font-size: 0.95rem; }
+    }}
+    .back {{ display: inline-flex; align-items: center; gap: 6px; margin-bottom: 16px; color: var(--accent-color); text-decoration: none; font-weight: 700; font-size: 0.95rem; }}
     
-    .fav-banner {
+    .fav-banner {{
         background: var(--card-bg);
         border: 1px solid var(--border-color);
-        padding: 14px;
-        border-radius: 14px;
+        padding: 14px 18px;
+        border-radius: 16px;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -263,13 +371,16 @@ COMMON_CSS = """
         color: var(--text-primary);
         margin-bottom: 24px;
         font-weight: 700;
-    }
+        box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+    }}
 """
 
 BOOKMARK_JS = """
 <script>
 function getFavs() {
-    return JSON.parse(localStorage.getItem('news_favs') || '[]');
+    try {
+        return JSON.parse(localStorage.getItem('news_favs') || '[]');
+    } catch(e) { return []; }
 }
 function isFav(url) {
     return getFavs().some(item => item.url === url);
@@ -288,7 +399,9 @@ function toggleFav(url, title, source, date, cat, img, summary) {
 function updateFavBtns() {
     document.querySelectorAll('.btn-fav').forEach(btn => {
         const url = btn.getAttribute('data-url');
-        btn.innerHTML = isFav(url) ? '⭐' : '📌';
+        if (url) {
+            btn.innerHTML = isFav(url) ? '⭐' : '📌';
+        }
     });
     const countEl = document.getElementById('fav-count');
     if (countEl) countEl.innerText = getFavs().length;
@@ -325,14 +438,13 @@ def extract_image_from_entry(entry):
     return None
 
 def resolve_real_url(url):
-    """ Resolves redirect URLs like Google News to get the direct publisher URL """
     if "news.google.com" not in url:
         return url
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         }
-        resp = requests.get(url, headers=headers, allow_redirects=True, timeout=5)
+        resp = requests.get(url, headers=headers, allow_redirects=True, timeout=4)
         if resp.status_code == 200:
             if "news.google.com" not in resp.url:
                 return resp.url
@@ -355,9 +467,9 @@ def fetch_clean_article(url, summary_fallback=""):
     }
     
     raw_text = ""
-    # 1. Try Jina Reader
+    # 1. Jina Reader
     try:
-        resp = requests.get(jina_url, headers=headers, timeout=12)
+        resp = requests.get(jina_url, headers=headers, timeout=10)
         if resp.status_code == 200 and len(resp.text.strip()) > 150:
             content = resp.text
             if "Markdown Content:" in content:
@@ -373,9 +485,9 @@ def fetch_clean_article(url, summary_fallback=""):
     except Exception:
         pass
 
-    # 2. Try Trafilatura directly on publisher URL
+    # 2. Trafilatura
     try:
-        resp = requests.get(real_url, headers={"User-Agent": headers["User-Agent"]}, timeout=8)
+        resp = requests.get(real_url, headers={"User-Agent": headers["User-Agent"]}, timeout=6)
         if resp.status_code == 200:
             text = trafilatura.extract(resp.text, include_links=False, output_format="txt") or ""
             if len(text.strip()) > 300:
@@ -388,7 +500,7 @@ def fetch_clean_article(url, summary_fallback=""):
     if len(raw_text) > 150:
         return raw_text
 
-    # 3. Fallback if article is paywalled / inaccessible
+    # 3. Fallback Paywall
     if summary_fallback and len(summary_fallback.strip()) > 15:
         return f"{summary_fallback}\n\n[Note: The full article is restricted or paywalled on the source website. Click 'View Original ↗' below to read directly on the publisher site.]"
 
@@ -429,44 +541,78 @@ def translate_to_english(text):
     except Exception:
         return text
 
+# --- HELPER POUR RENDER UN FEED RSS INDIVIDUEL EN PARALLÈLE ---
+def fetch_single_feed(source_name, feed_url):
+    items = []
+    try:
+        feed = feedparser.parse(feed_url)
+        for entry in feed.entries[:8]:
+            dt, formatted_date = parse_and_filter_date(entry)
+            if formatted_date is None:
+                continue
+                
+            img_url = extract_image_from_entry(entry)
+            summary_raw = entry.get("summary", "") or entry.get("description", "")
+            summary_clean = re.sub(r'<[^>]+>', '', summary_raw).strip()
+            title_clean = html.escape(entry.title)
+            
+            items.append({
+                "dt": dt or datetime.now(timezone.utc),
+                "title": title_clean,
+                "source": html.escape(source_name),
+                "date": formatted_date,
+                "img": img_url or "",
+                "summary": summary_clean,
+                "safe_url": quote(entry.link, safe=""),
+                "safe_title": quote(entry.title, safe=""),
+                "safe_summary": quote(summary_clean, safe=""),
+                "raw_url": entry.link
+            })
+    except Exception:
+        pass
+    return items
+
 @app.route("/")
 def index():
     today = datetime.now().strftime("%A, %B %d, %Y")
     
-    html = f"""
+    cat_cards = "".join([f'''
+    <a class="cat-card" href="/category?cat={cat_key}">
+        <div class="cat-icon">{cat['icon']}</div>
+        <div class="cat-title">{html.escape(cat['name'])}</div>
+    </a>
+    ''' for cat_key, cat in CATEGORIES.items()])
+
+    html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>News Info Hub</title>
+        <title>PulseHub - Global News</title>
         <style>{COMMON_CSS}</style>
     </head>
     <body>
-        <header>
-            <h1>News Info Hub</h1>
-            <p>{today}</p>
+        <header class="brand-header">
+            {MASCOT_SVG}
+            <h1 class="brand-title">PulseHub</h1>
+            <p class="brand-sub">{today}</p>
         </header>
 
         <a class="fav-banner" href="/favorites">
             <span>⭐ Read Later (Bookmarks)</span>
-            <span id="fav-count" style="background: var(--accent-color); color: #fff; padding: 2px 10px; border-radius: 12px; font-size: 0.85rem;">0</span>
+            <span id="fav-count" style="background: var(--accent-gradient); color: #fff; padding: 3px 11px; border-radius: 12px; font-size: 0.85rem;">0</span>
         </a>
 
-        <h2 style="font-size: 1.1rem; margin-bottom: 12px; color: var(--text-secondary);">Select a Category:</h2>
+        <h2 style="font-size: 1.1rem; margin-bottom: 14px; color: var(--text-secondary); font-weight: 700;">Categories</h2>
         <div class="category-grid">
-            {"".join([f'''
-            <a class="cat-card" href="/category?cat={cat_key}">
-                <div class="cat-icon">{cat['icon']}</div>
-                <div class="cat-title">{cat['name']}</div>
-            </a>
-            ''' for cat_key, cat in CATEGORIES.items()])}
+            {cat_cards}
         </div>
         {BOOKMARK_JS}
     </body>
     </html>
     """
-    return render_template_string(html)
+    return render_template_string(html_content)
 
 @app.route("/category")
 def category():
@@ -475,45 +621,34 @@ def category():
         return "Category not found.", 404
         
     cat_info = CATEGORIES[cat_key]
-    now_time = time.time()
     
-    if cat_key in CACHE_FEEDS and (now_time - CACHE_FEEDS[cat_key]['time'] < FEED_CACHE_TTL):
-        articles = CACHE_FEEDS[cat_key]['articles']
+    # 1. Vérification du cache en mémoire
+    cached_data = CACHE_FEEDS.get(cat_key)
+    if cached_data:
+        articles = cached_data
     else:
         articles = []
-        for source_name, feed_url in cat_info["feeds"].items():
-            try:
-                feed = feedparser.parse(feed_url)
-                for entry in feed.entries[:8]:
-                    dt, formatted_date = parse_and_filter_date(entry)
-                    if formatted_date is None:
-                        continue
-                        
-                    img_url = extract_image_from_entry(entry)
-                    summary_raw = entry.get("summary", "") or entry.get("description", "")
-                    summary_clean = re.sub(r'<[^>]+>', '', summary_raw).strip()
-                    
-                    articles.append({
-                        "dt": dt or datetime.now(timezone.utc),
-                        "title": entry.title,
-                        "source": source_name,
-                        "date": formatted_date,
-                        "img": img_url or "",
-                        "summary": summary_clean,
-                        "safe_url": quote(entry.link, safe=""),
-                        "safe_title": quote(entry.title, safe=""),
-                        "safe_summary": quote(summary_clean, safe=""),
-                        "raw_url": entry.link
-                    })
-            except Exception:
-                continue
+        # 2. Téléchargement MULTI-THREADING (Exécution parallèle ultra rapide)
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [
+                executor.submit(fetch_single_feed, s_name, f_url) 
+                for s_name, f_url in cat_info["feeds"].items()
+            ]
+            for future in as_completed(futures):
+                articles.extend(future.result())
 
         articles.sort(key=lambda x: x["dt"], reverse=True)
-        CACHE_FEEDS[cat_key] = {'time': now_time, 'articles': articles}
+        CACHE_FEEDS.set(cat_key, articles)
 
     articles_html = ""
     for a in articles:
-        img_tag = f'<img class="card-thumb" src="{a["img"]}" loading="lazy" alt="" />' if a["img"] else ''
+        img_tag = f'<img class="card-thumb" src="{html.escape(a["img"])}" loading="lazy" alt="" />' if a["img"] else ''
+        
+        # JS-safe encoding
+        js_title = quote(a['title'], safe='')
+        js_summary = quote(a['summary'], safe='')
+        js_url = quote(a['raw_url'], safe='')
+
         articles_html += f'''
         <div class="card">
             <div class="card-body-layout">
@@ -528,26 +663,26 @@ def category():
             </div>
             <div class="card-actions">
                 <a class="btn" href="/article?url={a['safe_url']}&title={a['safe_title']}&cat={cat_key}&summary={a['safe_summary']}">Read Article</a>
-                <button class="btn-fav" data-url="{a['raw_url']}" onclick="toggleFav('{a['raw_url']}', '{quote(a['title'], safe='')}', '{a['source']}', '{a['date']}', '{cat_key}', '{a['img']}', '{a['safe_summary']}')">📌</button>
+                <button class="btn-fav" data-url="{html.escape(a['raw_url'])}" onclick="toggleFav('{js_url}', '{js_title}', '{html.escape(a['source'])}', '{a['date']}', '{cat_key}', '{html.escape(a['img'])}', '{js_summary}')">📌</button>
             </div>
         </div>
         '''
 
-    html = f"""
+    html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{cat_info['name']} - News Info</title>
+        <title>{html.escape(cat_info['name'])} - PulseHub</title>
         <style>{COMMON_CSS}</style>
     </head>
     <body>
         <a class="back" href="/">&larr; All Categories</a>
-        <header style="text-align: left; margin-bottom: 20px;">
-            <div style="font-size: 2.5rem; margin-bottom: 4px;">{cat_info['icon']}</div>
-            <h1>{cat_info['name']}</h1>
-            <p style="text-align:left;">Published in the last 48 hours</p>
+        <header style="text-align: left; margin-bottom: 24px;">
+            <div style="font-size: 2.4rem; margin-bottom: 6px;">{cat_info['icon']}</div>
+            <h1 style="font-size: 1.8rem; font-weight: 800;">{html.escape(cat_info['name'])}</h1>
+            <p style="color: var(--text-secondary); font-size: 0.85rem;">Published in the last 48 hours</p>
         </header>
 
         <div class="articles-list">
@@ -557,7 +692,7 @@ def category():
     </body>
     </html>
     """
-    return render_template_string(html)
+    return render_template_string(html_content)
 
 @app.route("/article")
 def article():
@@ -572,44 +707,41 @@ def article():
     target_url = unquote(raw_url)
     title = unquote(raw_title)
     summary_fallback = unquote(raw_summary)
-    now_time = time.time()
     
-    if target_url in CACHE_TRANSLATIONS and (now_time - CACHE_TRANSLATIONS[target_url]['time'] < ARTICLE_CACHE_TTL):
-        translated_title = CACHE_TRANSLATIONS[target_url]['title']
-        translated_content = CACHE_TRANSLATIONS[target_url]['content']
+    # 1. Vérification cache traduction
+    cached_trans = CACHE_TRANSLATIONS.get(target_url)
+    if cached_trans:
+        translated_title, translated_content = cached_trans
     else:
-        if target_url in CACHE_ARTICLES and (now_time - CACHE_ARTICLES[target_url]['time'] < ARTICLE_CACHE_TTL):
-            raw_content = CACHE_ARTICLES[target_url]['text']
+        cached_art = CACHE_ARTICLES.get(target_url)
+        if cached_art:
+            raw_content = cached_art
         else:
             raw_content = fetch_clean_article(target_url, summary_fallback)
-            CACHE_ARTICLES[target_url] = {'time': now_time, 'text': raw_content}
+            CACHE_ARTICLES.set(target_url, raw_content)
             
         translated_title = translate_to_english(title)
         translated_content = translate_to_english(raw_content)
         
-        CACHE_TRANSLATIONS[target_url] = {
-            'time': now_time, 
-            'title': translated_title, 
-            'content': translated_content
-        }
+        CACHE_TRANSLATIONS.set(target_url, (translated_title, translated_content))
     
     back_url = f"/category?cat={cat_key}" if cat_key else "/"
     
-    html = f"""
+    html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{translated_title}</title>
+        <title>{html.escape(translated_title)}</title>
         <style>
             {COMMON_CSS}
             body {{ background: var(--card-bg); }}
-            .top-bar {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }}
-            .audio-btn {{ background: var(--bg-color); border: 1px solid var(--border-color); padding: 8px 14px; border-radius: 8px; color: var(--text-primary); cursor: pointer; font-weight: 700; font-size: 0.85rem; }}
-            article {{ font-size: 1.05rem; line-height: 1.8; color: var(--text-primary); margin-top: 20px; white-space: pre-line; }}
-            h1 {{ font-size: 1.5rem; line-height: 1.35; margin-bottom: 12px; }}
-            .actions {{ margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-color); text-align: center; display: flex; justify-content: center; gap: 10px; }}
+            .top-bar {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); }}
+            .audio-btn {{ background: var(--bg-color); border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 10px; color: var(--text-primary); cursor: pointer; font-weight: 700; font-size: 0.85rem; }}
+            article {{ font-size: 1.08rem; line-height: 1.85; color: var(--text-primary); margin-top: 20px; white-space: pre-line; }}
+            h1 {{ font-size: 1.6rem; line-height: 1.35; margin-bottom: 12px; font-weight: 800; }}
+            .actions {{ margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--border-color); text-align: center; display: flex; justify-content: center; gap: 12px; }}
         </style>
     </head>
     <body>
@@ -619,14 +751,14 @@ def article():
         </div>
 
         <header style="text-align: left; padding-bottom: 12px;">
-            <h1>{translated_title}</h1>
+            <h1>{html.escape(translated_title)}</h1>
         </header>
 
-        <article id="article-body">{translated_content}</article>
+        <article id="article-body">{html.escape(translated_content)}</article>
 
         <div class="actions">
-            <a class="btn-outline" href="{target_url}" target="_blank" rel="noopener">View Original ↗</a>
-            <button class="btn-fav" data-url="{target_url}" onclick="toggleFav('{target_url}', '{quote(raw_title, safe='')}', 'Source', '', '{cat_key}', '', '{quote(raw_summary, safe='')}')">📌</button>
+            <a class="btn-outline" href="{html.escape(target_url)}" target="_blank" rel="noopener">View Original ↗</a>
+            <button class="btn-fav" data-url="{html.escape(target_url)}" onclick="toggleFav('{quote(target_url, safe='')}', '{quote(title, safe='')}', 'Source', '', '{cat_key}', '', '{quote(summary_fallback, safe='')}')">📌</button>
         </div>
 
         {BOOKMARK_JS}
@@ -693,31 +825,31 @@ def article():
     </body>
     </html>
     """
-    return render_template_string(html)
+    return render_template_string(html_content)
 
 @app.route("/favorites")
 def favorites():
-    html = f"""
+    html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Saved Articles - News Info</title>
+        <title>Saved Articles - PulseHub</title>
         <style>{COMMON_CSS}</style>
     </head>
     <body>
         <a class="back" href="/">&larr; Home</a>
-        <header style="text-align: left; margin-bottom: 20px;">
-            <h1>⭐ Saved Articles</h1>
-            <p style="text-align:left;">Read later</p>
+        <header style="text-align: left; margin-bottom: 24px;">
+            <h1 style="font-size: 1.8rem; font-weight: 800;">⭐ Saved Articles</h1>
+            <p style="color: var(--text-secondary); font-size: 0.85rem;">Read later</p>
         </header>
 
         <div id="favs-list"></div>
 
         <script>
             function renderFavs() {{
-                const favs = JSON.parse(localStorage.getItem('news_favs') || '[]');
+                const favs = getFavs();
                 const container = document.getElementById('favs-list');
                 if (favs.length === 0) {{
                     container.innerHTML = '<p style="color: var(--text-secondary);">No saved articles yet.</p>';
@@ -755,7 +887,7 @@ def favorites():
             }}
 
             function removeFav(url) {{
-                let favs = JSON.parse(localStorage.getItem('news_favs') || '[]');
+                let favs = getFavs();
                 favs = favs.filter(item => item.url !== url);
                 localStorage.setItem('news_favs', JSON.stringify(favs));
                 renderFavs();
@@ -766,7 +898,7 @@ def favorites():
     </body>
     </html>
     """
-    return render_template_string(html)
+    return render_template_string(html_content)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
