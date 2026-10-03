@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import quote, unquote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from deep_translator import GoogleTranslator
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, jsonify, send_from_directory
 
 app = Flask(__name__)
 
@@ -44,10 +44,11 @@ class BoundedTTLCache:
         for k in expired:
             del self.cache[k]
 
-CACHE_FEEDS = BoundedTTLCache(ttl_seconds=600, max_size=50)        # 10 minutes
-CACHE_ARTICLES = BoundedTTLCache(ttl_seconds=86400, max_size=300)   # 24 heures
-CACHE_TRANSLATIONS = BoundedTTLCache(ttl_seconds=86400, max_size=300) # 24 heures
-CACHE_SUMMARIES = BoundedTTLCache(ttl_seconds=86400, max_size=300)   # 24 heures
+CACHE_FEEDS = BoundedTTLCache(ttl_seconds=600, max_size=50)
+CACHE_ARTICLES = BoundedTTLCache(ttl_seconds=86400, max_size=300)
+CACHE_TRANSLATIONS = BoundedTTLCache(ttl_seconds=86400, max_size=300)
+CACHE_SUMMARIES = BoundedTTLCache(ttl_seconds=86400, max_size=300)
+CACHE_SEARCH = BoundedTTLCache(ttl_seconds=300, max_size=100)
 
 # --- ROTATION DE USER-AGENTS RÉALISTES ---
 USER_AGENTS = [
@@ -86,7 +87,7 @@ def get_summarizer():
             _summarizer = pipeline(
                 "summarization",
                 model="sshleifer/distilbart-cnn-12-6",
-                device=-1,  # CPU
+                device=-1,
             )
         except Exception:
             _summarizer = False
@@ -99,8 +100,6 @@ def generate_summary(text, max_length=250, min_length=80):
     if summarizer is None:
         return None
     try:
-        # DistilBART a une limite de ~1024 tokens en entrée
-        # On prend les 3000 premiers caractères pour rester dans la limite
         input_text = text[:3000]
         result = summarizer(
             input_text,
@@ -116,7 +115,6 @@ def generate_summary(text, max_length=250, min_length=80):
 
 # --- SCRAPING ANTI-BOT AMÉLIORÉ ---
 def fetch_with_curl_cffi(url, headers=None):
-    """Utilise curl_cffi pour imiter les empreintes TLS d'un vrai navigateur."""
     try:
         from curl_cffi import requests as curl_requests
         h = headers or get_random_headers()
@@ -128,7 +126,6 @@ def fetch_with_curl_cffi(url, headers=None):
     return None
 
 def fetch_with_playwright(url):
-    """Fallback : utilise un vrai navigateur headless via Playwright."""
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -140,7 +137,6 @@ def fetch_with_playwright(url):
             )
             page = context.new_page()
             page.goto(url, wait_until="networkidle", timeout=20000)
-            # Simuler un scroll humain
             page.mouse.wheel(0, 500)
             time.sleep(1)
             content = page.content()
@@ -158,7 +154,7 @@ def fetch_clean_article(url, summary_fallback=""):
     
     raw_text = ""
     
-    # 1. Jina Reader (rapide, souvent suffisant)
+    # 1. Jina Reader
     try:
         resp = requests.get(jina_url, headers=headers, timeout=10)
         if resp.status_code == 200 and len(resp.text.strip()) > 150:
@@ -176,7 +172,7 @@ def fetch_clean_article(url, summary_fallback=""):
     except Exception:
         pass
 
-    # 2. curl_cffi (imite TLS navigateur)
+    # 2. curl_cffi
     html_content = fetch_with_curl_cffi(real_url)
     if html_content:
         try:
@@ -200,7 +196,7 @@ def fetch_clean_article(url, summary_fallback=""):
     except Exception:
         pass
 
-    # 4. Playwright (fallback ultime anti-bot)
+    # 4. Playwright
     html_content = fetch_with_playwright(real_url)
     if html_content:
         try:
@@ -343,22 +339,15 @@ MASCOT_SVG = """
             <stop offset="100%" stop-color="#2563eb" />
         </linearGradient>
     </defs>
-    <!-- Aura de fond -->
     <circle cx="50" cy="50" r="46" fill="url(#logoGrad)" opacity="0.12"/>
     <circle cx="50" cy="50" r="40" stroke="url(#logoGrad)" stroke-width="2.5" stroke-dasharray="4 3"/>
-    
-    <!-- Corps Cyber-Owl -->
     <path d="M28 36 L50 22 L72 36 L68 68 L50 82 L32 68 Z" fill="url(#logoGrad)"/>
-    
-    <!-- Yeux Lumineux -->
     <circle cx="41" cy="44" r="7.5" fill="#ffffff"/>
     <circle cx="59" cy="44" r="7.5" fill="#ffffff"/>
     <circle cx="41" cy="44" r="4" fill="url(#eyeGrad)"/>
     <circle cx="59" cy="44" r="4" fill="url(#eyeGrad)"/>
     <circle cx="42.5" cy="42.5" r="1.5" fill="#ffffff"/>
     <circle cx="60.5" cy="42.5" r="1.5" fill="#ffffff"/>
-    
-    <!-- Bec & Plumage -->
     <path d="M46 51 L50 56 L54 51 Z" fill="#f59e0b"/>
     <path d="M36 62 Q50 70 64 62" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.9"/>
 </svg>
@@ -396,7 +385,6 @@ COMMON_CSS = f"""
         line-height: 1.5;
     }}
     
-    /* Header & Logo Branding */
     .brand-header {{
         display: flex;
         flex-direction: column;
@@ -549,6 +537,85 @@ COMMON_CSS = f"""
         box-shadow: 0 2px 8px rgba(0,0,0,0.02);
     }}
     
+    /* Search Bar */
+    .search-container {{
+        margin-bottom: 24px;
+        position: relative;
+    }}
+    .search-input {{
+        width: 100%;
+        padding: 14px 20px 14px 48px;
+        border: 2px solid var(--border-color);
+        border-radius: 14px;
+        background: var(--card-bg);
+        color: var(--text-primary);
+        font-size: 1rem;
+        font-weight: 500;
+        outline: none;
+        transition: border-color 0.2s ease;
+    }}
+    .search-input:focus {{
+        border-color: var(--accent-color);
+    }}
+    .search-icon {{
+        position: absolute;
+        left: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 1.2rem;
+        opacity: 0.5;
+    }}
+    
+    /* Theme Toggle */
+    .theme-toggle {{
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        border: 1px solid var(--border-color);
+        background: var(--card-bg);
+        cursor: pointer;
+        font-size: 1.3rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        transition: all 0.2s ease;
+        z-index: 1000;
+    }}
+    .theme-toggle:hover {{
+        transform: scale(1.1);
+    }}
+    
+    /* Share Buttons */
+    .share-buttons {{
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+        flex-wrap: wrap;
+    }}
+    .share-btn {{
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 14px;
+        border-radius: 10px;
+        border: 1px solid var(--border-color);
+        background: var(--card-bg);
+        color: var(--text-primary);
+        text-decoration: none;
+        font-size: 0.82rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }}
+    .share-btn:hover {{
+        border-color: var(--accent-color);
+        transform: translateY(-1px);
+    }}
+    
     /* Summary Box */
     .summary-box {{
         background: linear-gradient(135deg, rgba(37,99,235,0.05) 0%, rgba(124,58,237,0.05) 100%);
@@ -572,10 +639,6 @@ COMMON_CSS = f"""
         font-size: 0.95rem;
         line-height: 1.7;
         color: var(--text-primary);
-    }}
-    .summary-loading {{
-        color: var(--text-secondary);
-        font-style: italic;
     }}
     
     /* Toggle Buttons */
@@ -635,6 +698,107 @@ function updateFavBtns() {
     if (countEl) countEl.innerText = getFavs().length;
 }
 document.addEventListener('DOMContentLoaded', updateFavBtns);
+</script>
+"""
+
+# --- JAVASCRIPT GLOBAL (recherche + thème + partage) ---
+GLOBAL_JS = """
+<script>
+// --- MODE SOMBRE MANUEL ---
+function initTheme() {
+    const saved = localStorage.getItem('pulsehub_theme');
+    if (saved === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    } else if (saved === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+    }
+}
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme');
+    const isDark = current === 'dark' || 
+        (!current && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    
+    if (isDark) {
+        document.documentElement.setAttribute('data-theme', 'light');
+        localStorage.setItem('pulsehub_theme', 'light');
+    } else {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        localStorage.setItem('pulsehub_theme', 'dark');
+    }
+    updateThemeBtn();
+}
+
+function updateThemeBtn() {
+    const btn = document.getElementById('theme-toggle');
+    if (btn) {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+            (!document.documentElement.getAttribute('data-theme') && 
+             window.matchMedia('(prefers-color-scheme: dark)').matches);
+        btn.innerHTML = isDark ? '☀️' : '🌙';
+    }
+}
+
+// --- RECHERCHE ---
+function searchArticles(query) {
+    if (!query || query.length < 2) return;
+    window.location.href = '/search?q=' + encodeURIComponent(query);
+}
+
+// --- PARTAGE SOCIAL ---
+function shareArticle(platform, url, title) {
+    const encodedUrl = encodeURIComponent(url);
+    const encodedTitle = encodeURIComponent(title);
+    let shareUrl = '';
+    
+    switch(platform) {
+        case 'twitter':
+            shareUrl = 'https://twitter.com/intent/tweet?url=' + encodedUrl + '&text=' + encodedTitle;
+            break;
+        case 'facebook':
+            shareUrl = 'https://www.facebook.com/sharer/sharer.php?u=' + encodedUrl;
+            break;
+        case 'whatsapp':
+            shareUrl = 'https://wa.me/?text=' + encodedTitle + '%20' + encodedUrl;
+            break;
+        case 'telegram':
+            shareUrl = 'https://t.me/share/url?url=' + encodedUrl + '&text=' + encodedTitle;
+            break;
+        case 'linkedin':
+            shareUrl = 'https://www.linkedin.com/sharing/share-offsite/?url=' + encodedUrl;
+            break;
+        case 'copy':
+            navigator.clipboard.writeText(url).then(() => {
+                alert('Link copied to clipboard!');
+            });
+            return;
+    }
+    
+    if (shareUrl) {
+        window.open(shareUrl, '_blank', 'width=600,height=400');
+    }
+}
+
+// --- PWA ---
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
+    updateThemeBtn();
+    
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) {
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                searchArticles(searchInput.value);
+            }
+        });
+    }
+});
 </script>
 """
 
@@ -719,7 +883,6 @@ def translate_to_english(text):
     except Exception:
         return text
 
-# --- HELPER POUR RENDER UN FEED RSS INDIVIDUEL EN PARALLÈLE ---
 def fetch_single_feed(source_name, feed_url):
     items = []
     try:
@@ -750,6 +913,27 @@ def fetch_single_feed(source_name, feed_url):
         pass
     return items
 
+def get_all_articles():
+    """Récupère tous les articles de toutes les catégories."""
+    all_articles = []
+    for cat_key, cat_info in CATEGORIES.items():
+        cached_data = CACHE_FEEDS.get(cat_key)
+        if cached_data:
+            all_articles.extend(cached_data)
+        else:
+            articles = []
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [
+                    executor.submit(fetch_single_feed, s_name, f_url) 
+                    for s_name, f_url in cat_info["feeds"].items()
+                ]
+                for future in as_completed(futures):
+                    articles.extend(future.result())
+            articles.sort(key=lambda x: x["dt"], reverse=True)
+            CACHE_FEEDS.set(cat_key, articles)
+            all_articles.extend(articles)
+    return all_articles
+
 @app.route("/")
 def index():
     today = datetime.now().strftime("%A, %B %d, %Y")
@@ -768,14 +952,23 @@ def index():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>PulseHub - Global News</title>
+        <link rel="manifest" href="/manifest.json">
+        <meta name="theme-color" content="#2563eb">
         <style>{COMMON_CSS}</style>
     </head>
     <body>
+        <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()">🌙</button>
+        
         <header class="brand-header">
             {MASCOT_SVG}
             <h1 class="brand-title">PulseHub</h1>
             <p class="brand-sub">{today}</p>
         </header>
+
+        <div class="search-container">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="search-input" class="search-input" placeholder="Search articles..." />
+        </div>
 
         <a class="fav-banner" href="/favorites">
             <span>⭐ Read Later (Bookmarks)</span>
@@ -787,6 +980,7 @@ def index():
             {cat_cards}
         </div>
         {BOOKMARK_JS}
+        {GLOBAL_JS}
     </body>
     </html>
     """
@@ -800,13 +994,11 @@ def category():
         
     cat_info = CATEGORIES[cat_key]
     
-    # 1. Vérification du cache en mémoire
     cached_data = CACHE_FEEDS.get(cat_key)
     if cached_data:
         articles = cached_data
     else:
         articles = []
-        # 2. Téléchargement MULTI-THREADING (Exécution parallèle ultra rapide)
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = [
                 executor.submit(fetch_single_feed, s_name, f_url) 
@@ -822,7 +1014,6 @@ def category():
     for a in articles:
         img_tag = f'<img class="card-thumb" src="{html.escape(a["img"])}" loading="lazy" alt="" />' if a["img"] else ''
         
-        # JS-safe encoding
         js_title = quote(a['title'], safe='')
         js_summary = quote(a['summary'], safe='')
         js_url = quote(a['raw_url'], safe='')
@@ -853,9 +1044,13 @@ def category():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{html.escape(cat_info['name'])} - PulseHub</title>
+        <link rel="manifest" href="/manifest.json">
+        <meta name="theme-color" content="#2563eb">
         <style>{COMMON_CSS}</style>
     </head>
     <body>
+        <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()">🌙</button>
+        
         <a class="back" href="/">&larr; All Categories</a>
         <header style="text-align: left; margin-bottom: 24px;">
             <div style="font-size: 2.4rem; margin-bottom: 6px;">{cat_info['icon']}</div>
@@ -867,6 +1062,7 @@ def category():
             {articles_html if articles else '<p style="color: var(--text-secondary);">No articles published in the last 48 hours.</p>'}
         </div>
         {BOOKMARK_JS}
+        {GLOBAL_JS}
     </body>
     </html>
     """
@@ -886,7 +1082,6 @@ def article():
     title = unquote(raw_title)
     summary_fallback = unquote(raw_summary)
     
-    # 1. Vérification cache traduction
     cached_trans = CACHE_TRANSLATIONS.get(target_url)
     if cached_trans:
         translated_title, translated_content = cached_trans
@@ -903,7 +1098,6 @@ def article():
         
         CACHE_TRANSLATIONS.set(target_url, (translated_title, translated_content))
     
-    # 2. Génération du résumé IA (avec cache)
     cached_summary = CACHE_SUMMARIES.get(target_url)
     if cached_summary is not None:
         ai_summary = cached_summary
@@ -913,7 +1107,6 @@ def article():
     
     back_url = f"/category?cat={cat_key}" if cat_key else "/"
     
-    # Affichage du résumé
     if ai_summary:
         summary_html = f"""
         <div class="summary-box">
@@ -931,6 +1124,8 @@ def article():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{html.escape(translated_title)}</title>
+        <link rel="manifest" href="/manifest.json">
+        <meta name="theme-color" content="#2563eb">
         <style>
             {COMMON_CSS}
             body {{ background: var(--card-bg); }}
@@ -942,6 +1137,8 @@ def article():
         </style>
     </head>
     <body>
+        <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()">🌙</button>
+        
         <div class="top-bar">
             <a class="back" style="margin-bottom:0;" href="{back_url}">&larr; Back to Feed</a>
             <button id="speech-btn" class="audio-btn" onclick="toggleAudio()">🔊 Listen</button>
@@ -965,7 +1162,17 @@ def article():
             <button class="btn-fav" data-url="{html.escape(target_url)}" onclick="toggleFav('{quote(target_url, safe='')}', '{quote(title, safe='')}', 'Source', '', '{cat_key}', '', '{quote(summary_fallback, safe='')}')">📌</button>
         </div>
 
+        <div class="share-buttons">
+            <button class="share-btn" onclick="shareArticle('twitter', '{html.escape(target_url)}', '{html.escape(translated_title)}')">𝕏 Twitter</button>
+            <button class="share-btn" onclick="shareArticle('facebook', '{html.escape(target_url)}', '{html.escape(translated_title)}')">📘 Facebook</button>
+            <button class="share-btn" onclick="shareArticle('whatsapp', '{html.escape(target_url)}', '{html.escape(translated_title)}')">💬 WhatsApp</button>
+            <button class="share-btn" onclick="shareArticle('telegram', '{html.escape(target_url)}', '{html.escape(translated_title)}')">✈️ Telegram</button>
+            <button class="share-btn" onclick="shareArticle('linkedin', '{html.escape(target_url)}', '{html.escape(translated_title)}')">💼 LinkedIn</button>
+            <button class="share-btn" onclick="shareArticle('copy', '{html.escape(target_url)}', '{html.escape(translated_title)}')">📋 Copy</button>
+        </div>
+
         {BOOKMARK_JS}
+        {GLOBAL_JS}
         <script>
             let synth = window.speechSynthesis;
             let speechChunks = [];
@@ -1049,6 +1256,84 @@ def article():
     """
     return render_template_string(html_content)
 
+@app.route("/search")
+def search():
+    query = request.args.get("q", "").strip()
+    if not query:
+        return "No search query.", 400
+    
+    # Vérifier le cache
+    cached_results = CACHE_SEARCH.get(query)
+    if cached_results is not None:
+        results = cached_results
+    else:
+        all_articles = get_all_articles()
+        query_lower = query.lower()
+        results = []
+        for a in all_articles:
+            title_lower = a["title"].lower()
+            summary_lower = a["summary"].lower()
+            if query_lower in title_lower or query_lower in summary_lower:
+                results.append(a)
+        CACHE_SEARCH.set(query, results)
+    
+    results_html = ""
+    for a in results:
+        img_tag = f'<img class="card-thumb" src="{html.escape(a["img"])}" loading="lazy" alt="" />' if a["img"] else ''
+        
+        js_title = quote(a['title'], safe='')
+        js_summary = quote(a['summary'], safe='')
+        js_url = quote(a['raw_url'], safe='')
+
+        results_html += f'''
+        <div class="card">
+            <div class="card-body-layout">
+                {img_tag}
+                <div class="card-main">
+                    <div class="card-meta">
+                        <span class="tag">{a['source']}</span>
+                        <span class="date">{a['date']}</span>
+                    </div>
+                    <div class="card-title">{a['title']}</div>
+                </div>
+            </div>
+            <div class="card-actions">
+                <a class="btn" href="/article?url={a['safe_url']}&title={a['safe_title']}&cat=&summary={a['safe_summary']}">Read Article</a>
+                <button class="btn-fav" data-url="{html.escape(a['raw_url'])}" onclick="toggleFav('{js_url}', '{js_title}', '{html.escape(a['source'])}', '{a['date']}', '', '{html.escape(a['img'])}', '{js_summary}')">📌</button>
+            </div>
+        </div>
+        '''
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Search: {html.escape(query)} - PulseHub</title>
+        <link rel="manifest" href="/manifest.json">
+        <meta name="theme-color" content="#2563eb">
+        <style>{COMMON_CSS}</style>
+    </head>
+    <body>
+        <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()">🌙</button>
+        
+        <a class="back" href="/">&larr; Home</a>
+        <header style="text-align: left; margin-bottom: 24px;">
+            <h1 style="font-size: 1.8rem; font-weight: 800;">🔍 Search Results</h1>
+            <p style="color: var(--text-secondary); font-size: 0.85rem;">{len(results)} results for "{html.escape(query)}"</p>
+        </header>
+
+        <div class="articles-list">
+            {results_html if results else '<p style="color: var(--text-secondary);">No articles found.</p>'}
+        </div>
+        {BOOKMARK_JS}
+        {GLOBAL_JS}
+    </body>
+    </html>
+    """
+    return render_template_string(html_content)
+
 @app.route("/favorites")
 def favorites():
     html_content = f"""
@@ -1058,9 +1343,13 @@ def favorites():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Saved Articles - PulseHub</title>
+        <link rel="manifest" href="/manifest.json">
+        <meta name="theme-color" content="#2563eb">
         <style>{COMMON_CSS}</style>
     </head>
     <body>
+        <button id="theme-toggle" class="theme-toggle" onclick="toggleTheme()">🌙</button>
+        
         <a class="back" href="/">&larr; Home</a>
         <header style="text-align: left; margin-bottom: 24px;">
             <h1 style="font-size: 1.8rem; font-weight: 800;">⭐ Saved Articles</h1>
@@ -1069,6 +1358,8 @@ def favorites():
 
         <div id="favs-list"></div>
 
+        {BOOKMARK_JS}
+        {GLOBAL_JS}
         <script>
             function renderFavs() {
                 const favs = getFavs();
@@ -1121,6 +1412,35 @@ def favorites():
     </html>
     """
     return render_template_string(html_content)
+
+# --- PWA ROUTES ---
+@app.route("/manifest.json")
+def manifest():
+    return jsonify({
+        "name": "PulseHub - Global News",
+        "short_name": "PulseHub",
+        "description": "Global news aggregator with AI summaries",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#f8fafc",
+        "theme_color": "#2563eb",
+        "icons": [
+            {
+                "src": "/static/icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png"
+            },
+            {
+                "src": "/static/icon-512.png",
+                "sizes": "512x512",
+                "type": "image/png"
+            }
+        ]
+    })
+
+@app.route("/sw.js")
+def service_worker():
+    return send_from_directory("static", "sw.js"), 200, {"Content-Type": "application/javascript"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
