@@ -4,3 +4,9 @@ trafilatura
 gunicorn
 requests
 deep-translator
+curl_cffi
+playwright
+transformers
+torch
+sumy
+nltk
