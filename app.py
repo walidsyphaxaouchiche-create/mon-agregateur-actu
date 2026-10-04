@@ -86,7 +86,6 @@ def generate_summary(text, sentence_count=5):
         from sumy.summarizers.text_rank import TextRankSummarizer
         import nltk
         
-        # Télécharger les données NLTK si nécessaire
         try:
             nltk.data.find('tokenizers/punkt')
         except LookupError:
@@ -311,8 +310,8 @@ MASCOT_SVG = """
 </svg>
 """
 
-COMMON_CSS = f"""
-    :root {{
+COMMON_CSS = """
+    :root {
         --bg-color: #f8fafc;
         --card-bg: #ffffff;
         --text-primary: #0f172a;
@@ -320,9 +319,9 @@ COMMON_CSS = f"""
         --border-color: #e2e8f0;
         --accent-color: #2563eb;
         --accent-gradient: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
-    }}
-    @media (prefers-color-scheme: dark) {{
-        :root {{
+    }
+    @media (prefers-color-scheme: dark) {
+        :root {
             --bg-color: #0f172a;
             --card-bg: #1e293b;
             --text-primary: #f8fafc;
@@ -330,10 +329,10 @@ COMMON_CSS = f"""
             --border-color: #334155;
             --accent-color: #3b82f6;
             --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-        }}
-    }}
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{ 
+        }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { 
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
         background: var(--bg-color); 
         color: var(--text-primary); 
@@ -341,9 +340,9 @@ COMMON_CSS = f"""
         margin: 0 auto; 
         padding: 20px 16px 40px 16px;
         line-height: 1.5;
-    }}
+    }
     
-    .brand-header {{
+    .brand-header {
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -351,39 +350,39 @@ COMMON_CSS = f"""
         margin-bottom: 24px;
         padding-top: 10px;
         text-align: center;
-    }}
-    .brand-logo {{
+    }
+    .brand-logo {
         width: 72px;
         height: 72px;
         margin-bottom: 10px;
         filter: drop-shadow(0 4px 12px rgba(37, 99, 235, 0.2));
         transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-    }}
-    .brand-logo:hover {{
+    }
+    .brand-logo:hover {
         transform: scale(1.08) rotate(-3deg);
-    }}
-    .brand-title {{
+    }
+    .brand-title {
         font-size: 2.1rem;
         font-weight: 900;
         letter-spacing: -0.8px;
         background: var(--accent-gradient);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-    }}
-    .brand-sub {{
+    }
+    .brand-sub {
         font-size: 0.85rem;
         color: var(--text-secondary);
         margin-top: 4px;
         font-weight: 500;
-    }}
+    }
     
-    .category-grid {{
+    .category-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
         gap: 12px;
         margin-bottom: 24px;
-    }}
-    .cat-card {{
+    }
+    .cat-card {
         background: var(--card-bg);
         border: 1px solid var(--border-color);
         padding: 16px 12px;
@@ -396,17 +395,17 @@ COMMON_CSS = f"""
         text-align: center;
         transition: all 0.2s ease;
         box-shadow: 0 2px 5px rgba(0,0,0,0.02);
-    }}
-    .cat-card:hover {{
+    }
+    .cat-card:hover {
         transform: translateY(-2px);
         border-color: var(--accent-color);
         box-shadow: 0 6px 16px rgba(0,0,0,0.06);
-    }}
-    .cat-card:active {{ transform: scale(0.97); }}
-    .cat-icon {{ font-size: 2rem; margin-bottom: 8px; }}
-    .cat-title {{ font-size: 0.9rem; font-weight: 700; line-height: 1.2; }}
+    }
+    .cat-card:active { transform: scale(0.97); }
+    .cat-icon { font-size: 2rem; margin-bottom: 8px; }
+    .cat-title { font-size: 0.9rem; font-weight: 700; line-height: 1.2; }
 
-    .card {{ 
+    .card { 
         background: var(--card-bg); 
         padding: 18px; 
         margin-bottom: 16px; 
@@ -414,36 +413,36 @@ COMMON_CSS = f"""
         border: 1px solid var(--border-color);
         box-shadow: 0 4px 12px rgba(0,0,0,0.03); 
         transition: border-color 0.2s ease;
-    }}
-    .card:hover {{
+    }
+    .card:hover {
         border-color: var(--accent-color);
-    }}
-    .card-body-layout {{
+    }
+    .card-body-layout {
         display: flex;
         gap: 14px;
         align-items: flex-start;
         margin-bottom: 14px;
-    }}
-    .card-thumb {{
+    }
+    .card-thumb {
         width: 88px;
         height: 88px;
         border-radius: 12px;
         object-fit: cover;
         flex-shrink: 0;
         background: var(--border-color);
-    }}
-    .card-main {{ flex: 1; }}
-    .card-meta {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }}
-    .tag {{ font-size: 0.72rem; font-weight: 700; padding: 3px 9px; border-radius: 20px; background: rgba(37,99,235,0.12); color: var(--accent-color); }}
-    .date {{ font-size: 0.72rem; color: var(--text-secondary); }}
-    .card-title {{ font-size: 1.05rem; font-weight: 700; line-height: 1.4; color: var(--text-primary); }}
+    }
+    .card-main { flex: 1; }
+    .card-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .tag { font-size: 0.72rem; font-weight: 700; padding: 3px 9px; border-radius: 20px; background: rgba(37,99,235,0.12); color: var(--accent-color); }
+    .date { font-size: 0.72rem; color: var(--text-secondary); }
+    .card-title { font-size: 1.05rem; font-weight: 700; line-height: 1.4; color: var(--text-primary); }
     
-    .card-actions {{
+    .card-actions {
         display: flex;
         gap: 10px;
         align-items: center;
-    }}
-    .btn {{ 
+    }
+    .btn { 
         flex: 1;
         text-align: center; 
         padding: 10px 14px; 
@@ -455,9 +454,9 @@ COMMON_CSS = f"""
         font-size: 0.88rem; 
         box-shadow: 0 2px 8px rgba(37,99,235,0.25);
         transition: opacity 0.2s;
-    }}
-    .btn:hover {{ opacity: 0.92; }}
-    .btn-fav {{
+    }
+    .btn:hover { opacity: 0.92; }
+    .btn-fav {
         background: var(--bg-color);
         border: 1px solid var(--border-color);
         padding: 8px 12px;
@@ -465,9 +464,9 @@ COMMON_CSS = f"""
         cursor: pointer;
         font-size: 1.1rem;
         transition: transform 0.15s ease;
-    }}
-    .btn-fav:active {{ transform: scale(0.88); }}
-    .btn-outline {{
+    }
+    .btn-fav:active { transform: scale(0.88); }
+    .btn-outline {
         display: inline-block;
         padding: 9px 16px;
         border: 1px solid var(--border-color);
@@ -477,10 +476,10 @@ COMMON_CSS = f"""
         font-size: 0.88rem;
         font-weight: 700;
         background: var(--card-bg);
-    }}
-    .back {{ display: inline-flex; align-items: center; gap: 6px; margin-bottom: 16px; color: var(--accent-color); text-decoration: none; font-weight: 700; font-size: 0.95rem; }}
+    }
+    .back { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 16px; color: var(--accent-color); text-decoration: none; font-weight: 700; font-size: 0.95rem; }
     
-    .fav-banner {{
+    .fav-banner {
         background: var(--card-bg);
         border: 1px solid var(--border-color);
         padding: 14px 18px;
@@ -493,14 +492,14 @@ COMMON_CSS = f"""
         margin-bottom: 24px;
         font-weight: 700;
         box-shadow: 0 2px 8px rgba(0,0,0,0.02);
-    }}
+    }
     
     /* Search Bar */
-    .search-container {{
+    .search-container {
         margin-bottom: 24px;
         position: relative;
-    }}
-    .search-input {{
+    }
+    .search-input {
         width: 100%;
         padding: 14px 20px 14px 48px;
         border: 2px solid var(--border-color);
@@ -511,21 +510,21 @@ COMMON_CSS = f"""
         font-weight: 500;
         outline: none;
         transition: border-color 0.2s ease;
-    }}
-    .search-input:focus {{
+    }
+    .search-input:focus {
         border-color: var(--accent-color);
-    }}
-    .search-icon {{
+    }
+    .search-icon {
         position: absolute;
         left: 16px;
         top: 50%;
         transform: translateY(-50%);
         font-size: 1.2rem;
         opacity: 0.5;
-    }}
+    }
     
     /* Theme Toggle */
-    .theme-toggle {{
+    .theme-toggle {
         position: fixed;
         top: 20px;
         right: 20px;
@@ -542,19 +541,19 @@ COMMON_CSS = f"""
         box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         transition: all 0.2s ease;
         z-index: 1000;
-    }}
-    .theme-toggle:hover {{
+    }
+    .theme-toggle:hover {
         transform: scale(1.1);
-    }}
+    }
     
     /* Share Buttons */
-    .share-buttons {{
+    .share-buttons {
         display: flex;
         gap: 8px;
         margin-top: 12px;
         flex-wrap: wrap;
-    }}
-    .share-btn {{
+    }
+    .share-btn {
         display: inline-flex;
         align-items: center;
         gap: 6px;
@@ -568,21 +567,21 @@ COMMON_CSS = f"""
         font-weight: 600;
         cursor: pointer;
         transition: all 0.2s ease;
-    }}
-    .share-btn:hover {{
+    }
+    .share-btn:hover {
         border-color: var(--accent-color);
         transform: translateY(-1px);
-    }}
+    }
     
     /* Summary Box */
-    .summary-box {{
+    .summary-box {
         background: linear-gradient(135deg, rgba(37,99,235,0.05) 0%, rgba(124,58,237,0.05) 100%);
         border: 1px solid rgba(37,99,235,0.15);
         border-radius: 14px;
         padding: 16px 18px;
         margin-bottom: 20px;
-    }}
-    .summary-label {{
+    }
+    .summary-label {
         font-size: 0.75rem;
         font-weight: 800;
         text-transform: uppercase;
@@ -592,20 +591,20 @@ COMMON_CSS = f"""
         display: flex;
         align-items: center;
         gap: 6px;
-    }}
-    .summary-text {{
+    }
+    .summary-text {
         font-size: 0.95rem;
         line-height: 1.7;
         color: var(--text-primary);
-    }}
+    }
     
     /* Toggle Buttons */
-    .view-toggle {{
+    .view-toggle {
         display: flex;
         gap: 8px;
         margin-bottom: 16px;
-    }}
-    .toggle-btn {{
+    }
+    .toggle-btn {
         flex: 1;
         padding: 10px 14px;
         border-radius: 10px;
@@ -616,12 +615,12 @@ COMMON_CSS = f"""
         font-size: 0.85rem;
         cursor: pointer;
         transition: all 0.2s ease;
-    }}
-    .toggle-btn.active {{
+    }
+    .toggle-btn.active {
         background: var(--accent-gradient);
         color: #fff;
         border-color: transparent;
-    }}
+    }
 """
 
 BOOKMARK_JS = """
@@ -1318,50 +1317,50 @@ def favorites():
         {BOOKMARK_JS}
         {GLOBAL_JS}
         <script>
-            function renderFavs() {
+            function renderFavs() {{
                 const favs = getFavs();
                 const container = document.getElementById('favs-list');
-                if (favs.length === 0) {
+                if (favs.length === 0) {{
                     container.innerHTML = '<p style="color: var(--text-secondary);">No saved articles yet.</p>';
                     return;
-                }
+                }}
                 
                 let html = '';
-                favs.forEach(a => {
+                favs.forEach(a => {{
                     const title = decodeURIComponent(a.title);
                     const safeTitle = encodeURIComponent(title);
                     const safeUrl = encodeURIComponent(a.url);
                     const safeSummary = a.summary || '';
-                    const imgTag = a.img ? `<img class="card-thumb" src="${a.img}" loading="lazy" alt="" />` : '';
+                    const imgTag = a.img ? `<img class="card-thumb" src="${{a.img}}" loading="lazy" alt="" />` : '';
                     
                     html += `
                     <div class="card">
                         <div class="card-body-layout">
-                            ${imgTag}
+                            ${{imgTag}}
                             <div class="card-main">
                                 <div class="card-meta">
-                                    <span class="tag">${a.source}</span>
-                                    <span class="date">${a.date}</span>
+                                    <span class="tag">${{a.source}}</span>
+                                    <span class="date">${{a.date}}</span>
                                 </div>
-                                <div class="card-title">${title}</div>
+                                <div class="card-title">${{title}}</div>
                             </div>
                         </div>
                         <div class="card-actions">
-                            <a class="btn" href="/article?url=${safeUrl}&title=${safeTitle}&cat=${a.cat}&summary=${safeSummary}">Read Article</a>
-                            <button class="btn-fav" onclick="removeFav('${a.url}')">🗑️</button>
+                            <a class="btn" href="/article?url=${{safeUrl}}&title=${{safeTitle}}&cat=${{a.cat}}&summary=${{safeSummary}}">Read Article</a>
+                            <button class="btn-fav" onclick="removeFav('${{a.url}}')">🗑️</button>
                         </div>
                     </div>
                     `;
-                });
+                }});
                 container.innerHTML = html;
-            }
+            }}
 
-            function removeFav(url) {
+            function removeFav(url) {{
                 let favs = getFavs();
                 favs = favs.filter(item => item.url !== url);
                 localStorage.setItem('news_favs', JSON.stringify(favs));
                 renderFavs();
-            }
+            }}
 
             document.addEventListener('DOMContentLoaded', renderFavs);
         </script>
