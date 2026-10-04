@@ -76,39 +76,31 @@ def get_random_headers():
         "Cache-Control": "max-age=0",
     }
 
-# --- MODÈLE DE RÉSUMÉ IA (DistilBART, CPU-only) ---
-_summarizer = None
-
-def get_summarizer():
-    global _summarizer
-    if _summarizer is None:
-        try:
-            from transformers import pipeline
-            _summarizer = pipeline(
-                "summarization",
-                model="sshleifer/distilbart-cnn-12-6",
-                device=-1,
-            )
-        except Exception:
-            _summarizer = False
-    return _summarizer if _summarizer else None
-
-def generate_summary(text, max_length=250, min_length=80):
+# --- RÉSUMÉ EXTRACTIF (TextRank via sumy, léger) ---
+def generate_summary(text, sentence_count=5):
     if not text or len(text.strip()) < 200:
         return None
-    summarizer = get_summarizer()
-    if summarizer is None:
-        return None
     try:
-        input_text = text[:3000]
-        result = summarizer(
-            input_text,
-            max_length=max_length,
-            min_length=min_length,
-            do_sample=False,
-        )
-        if result and len(result) > 0:
-            return result[0]["summary_text"]
+        from sumy.parsers.plaintext import PlaintextParser
+        from sumy.nlp.tokenizers import Tokenizer
+        from sumy.summarizers.text_rank import TextRankSummarizer
+        import nltk
+        
+        # Télécharger les données NLTK si nécessaire
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt', quiet=True)
+            nltk.download('punkt_tab', quiet=True)
+        
+        parser = PlaintextParser.from_string(text, Tokenizer("english"))
+        summarizer = TextRankSummarizer()
+        summary_sentences = summarizer(parser.document, sentence_count)
+        
+        if summary_sentences:
+            summary = " ".join([str(s) for s in summary_sentences])
+            if len(summary) > 50:
+                return summary
     except Exception:
         pass
     return None
@@ -121,28 +113,6 @@ def fetch_with_curl_cffi(url, headers=None):
         resp = curl_requests.get(url, headers=h, timeout=15, impersonate="chrome")
         if resp.status_code == 200 and len(resp.text) > 200:
             return resp.text
-    except Exception:
-        pass
-    return None
-
-def fetch_with_playwright(url):
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=random.choice(USER_AGENTS),
-                viewport={"width": 1920, "height": 1080},
-                locale="en-US",
-            )
-            page = context.new_page()
-            page.goto(url, wait_until="networkidle", timeout=20000)
-            page.mouse.wheel(0, 500)
-            time.sleep(1)
-            content = page.content()
-            browser.close()
-            if content and len(content) > 500:
-                return content
     except Exception:
         pass
     return None
@@ -196,22 +166,10 @@ def fetch_clean_article(url, summary_fallback=""):
     except Exception:
         pass
 
-    # 4. Playwright
-    html_content = fetch_with_playwright(real_url)
-    if html_content:
-        try:
-            text = trafilatura.extract(html_content, include_links=False, output_format="txt") or ""
-            if len(text.strip()) > 300:
-                return text.strip()
-            if len(text.strip()) > len(raw_text):
-                raw_text = text.strip()
-        except Exception:
-            pass
-
     if len(raw_text) > 150:
         return raw_text
 
-    # 5. Fallback Paywall
+    # 4. Fallback Paywall
     if summary_fallback and len(summary_fallback.strip()) > 15:
         return f"{summary_fallback}\n\n[Note: The full article is restricted or paywalled on the source website. Click 'View Original ↗' below to read directly on the publisher site.]"
 
@@ -701,7 +659,6 @@ document.addEventListener('DOMContentLoaded', updateFavBtns);
 </script>
 """
 
-# --- JAVASCRIPT GLOBAL (recherche + thème + partage) ---
 GLOBAL_JS = """
 <script>
 // --- MODE SOMBRE MANUEL ---
@@ -1098,6 +1055,7 @@ def article():
         
         CACHE_TRANSLATIONS.set(target_url, (translated_title, translated_content))
     
+    # Résumé extractif (TextRank)
     cached_summary = CACHE_SUMMARIES.get(target_url)
     if cached_summary is not None:
         ai_summary = cached_summary
@@ -1262,7 +1220,6 @@ def search():
     if not query:
         return "No search query.", 400
     
-    # Vérifier le cache
     cached_results = CACHE_SEARCH.get(query)
     if cached_results is not None:
         results = cached_results
